@@ -35,9 +35,13 @@ Zero-cloud, 100% local Home Assistant integration for CP PLUS STQC IP cameras, N
   - Smart Motion Detection (SMD Plus) **Vehicle Detection**
   - Perimeter **Tripwire Breach** (`CrossLineDetection`)
   - Standard **Motion Detection** (`VideoMotion`)
+- **Native Event Bus Dispatch**: Automatically dispatches `cpplus_event` on the Home Assistant event bus for easy automation triggers without polling.
+- **Day/Night & Illuminator Controls**: Dedicated select entities per camera channel for Day/Night mode (`Color`, `Auto`, `Black & White`) and camera illuminator control (`Auto`, `Manual`, `Off`).
+- **AI Detection Arming Controls**: Configurable switch entities per channel to toggle Human Detection, Vehicle Detection, and Tripwire algorithms directly from Home Assistant.
+- **PTZ Movement & Preset Services**: Native services (`cpplus.ptz_move`, `cpplus.ptz_stop`, `cpplus.ptz_preset`) supporting pan, tilt, optical zoom, focus adjustment, and preset recall on PTZ-capable channels.
 - **Rich Hardware Telemetry**: Automatically queries the NVR remote device table to report each channel's exact hardware model number, serial number, firmware version, and direct camera web URL.
 - **Remote Reboot Control**: Dedicated button entity to safely restart the hardware.
-- **Home Assistant 2026 Registry Compliance**: Built using modern `via_device_id` linkage, non-blocking TLS initialization, and cross-platform parity across camera, binary sensor, sensor, and button platforms.
+- **Home Assistant 2026 Registry Compliance**: Built using modern `via_device_id` linkage, non-blocking TLS initialization, and cross-platform parity across camera, binary sensor, sensor, button, select, and switch platforms.
 
 ---
 

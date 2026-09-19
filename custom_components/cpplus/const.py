@@ -32,4 +32,31 @@ PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
     Platform.SENSOR,
+    Platform.SELECT,
+    Platform.SWITCH,
 ]
+
+DAY_NIGHT_MODES: dict[int, str] = {
+    0: "Color",
+    1: "Auto",
+    2: "Black & White",
+}
+DAY_NIGHT_NAME_TO_INT: dict[str, int] = {v: k for k, v in DAY_NIGHT_MODES.items()}
+
+LIGHTING_MODES: list[str] = [
+    "Auto",
+    "Manual",
+    "Off",
+]
+
+PTZ_COMMANDS: dict[str, str] = {
+    "up": "Up",
+    "down": "Down",
+    "left": "Left",
+    "right": "Right",
+    "zoom_in": "ZoomIn",
+    "zoom_out": "ZoomOut",
+    "focus_near": "FocusNear",
+    "focus_far": "FocusFar",
+}
+

@@ -1,3 +1,121 @@
 reboot:
   name: Reboot Device
   description: Reboots the CP PLUS camera or NVR hardware remotely.
+
+ptz_move:
+  name: PTZ Move
+  description: Commands a PTZ-capable camera channel to pan, tilt, or zoom.
+  fields:
+    channel:
+      name: Channel
+      description: Camera channel number on the NVR (1-indexed).
+      required: false
+      default: 1
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 32
+          mode: box
+    command:
+      name: Command
+      description: Movement direction or optical zoom action.
+      required: true
+      example: "up"
+      selector:
+        select:
+          options:
+            - label: "Up"
+              value: "up"
+            - label: "Down"
+              value: "down"
+            - label: "Left"
+              value: "left"
+            - label: "Right"
+              value: "right"
+            - label: "Zoom In"
+              value: "zoom_in"
+            - label: "Zoom Out"
+              value: "zoom_out"
+            - label: "Focus Near"
+              value: "focus_near"
+            - label: "Focus Far"
+              value: "focus_far"
+    speed:
+      name: Speed
+      description: Movement or zoom speed (1-8).
+      required: false
+      default: 5
+      example: 5
+      selector:
+        number:
+          min: 1
+          max: 8
+          mode: slider
+
+ptz_stop:
+  name: PTZ Stop
+  description: Stops ongoing PTZ movement or zoom action on a camera channel.
+  fields:
+    channel:
+      name: Channel
+      description: Camera channel number on the NVR (1-indexed).
+      required: false
+      default: 1
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 32
+          mode: box
+    command:
+      name: Command
+      description: Movement command to stop.
+      required: false
+      default: "up"
+      example: "up"
+      selector:
+        select:
+          options:
+            - label: "Up"
+              value: "up"
+            - label: "Down"
+              value: "down"
+            - label: "Left"
+              value: "left"
+            - label: "Right"
+              value: "right"
+            - label: "Zoom In"
+              value: "zoom_in"
+            - label: "Zoom Out"
+              value: "zoom_out"
+            - label: "Focus Near"
+              value: "focus_near"
+            - label: "Focus Far"
+              value: "focus_far"
+
+ptz_preset:
+  name: PTZ Go To Preset
+  description: Commands a PTZ-capable camera channel to move to a saved preset position.
+  fields:
+    channel:
+      name: Channel
+      description: Camera channel number on the NVR (1-indexed).
+      required: false
+      default: 1
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 32
+          mode: box
+    preset:
+      name: Preset Number
+      description: Preset index number (1-255).
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: box

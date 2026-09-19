@@ -19,7 +19,8 @@ This document serves as the primary technical context, architectural briefing, a
   - **Snapshot Previews**: Binary JPEG extraction via `async_nvr_request_bytes()` with automatic HTTP 401 Digest challenge-response retry.
   - **Home Assistant 2026 Registry Compliance**: Fixed `RuntimeError` by pre-registering the parent NVR device and using `via_device_id` for all child camera devices.
   - **Hardware Telemetry Resolution**: Extracted exact model numbers, serials, firmware versions, and direct IP web URLs from the NVR's `RemoteDevice` configuration table.
-  - **Total Registered Entities**: **88 entities** across 18 devices (34 camera stream entities, 50 binary sensors, 3 telemetry sensors, 1 reboot button).
+  - **Total Registered Entities**: **173 entities** across 18 devices (34 camera stream entities, 50 binary sensors, 3 telemetry sensors, 1 reboot button, 34 Day/Night & Illuminator select entities, 51 AI Detection arming switches).
+  - **Native PTZ Services & Event Bus**: Services `cpplus.ptz_move`, `cpplus.ptz_stop`, and `cpplus.ptz_preset` for PTZ-capable channels, plus automatic native `cpplus_event` firing on the Home Assistant event bus.
 
 ---
 
@@ -145,8 +146,10 @@ ha-cpplus-stqc/
 │       ├── binary_sensor.py      # Binary sensor platform: SMD Human, Vehicle, Tripwire, Motion, Online status
 │       ├── sensor.py             # Sensor platform: Hub hardware model, serial number, firmware version
 │       ├── button.py             # Button platform: Hardware restart / reboot entity
+│       ├── select.py             # Select platform: Day/Night Mode (Color, Auto, B&W) & Illuminator Mode
+│       ├── switch.py             # Switch platform: SMD Human, Vehicle, & Tripwire detection arming switches
 │       ├── config_flow.py        # UI setup workflow with automatic NVR vs Camera detection
-│       ├── services.yaml         # Service declarations (cpplus.reboot)
+│       ├── services.yaml         # Service declarations (reboot, ptz_move, ptz_stop, ptz_preset)
 │       ├── strings.json          # UI localization strings
 │       └── translations/
 │           └── en.json           # English translation schema

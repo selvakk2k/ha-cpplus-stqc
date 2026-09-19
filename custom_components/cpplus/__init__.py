@@ -25,6 +25,7 @@ from .const import (
     DEFAULT_PORT_RTSP,
     TYPE_CAMERA,
     TYPE_NVR,
+    PTZ_COMMANDS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -97,6 +98,67 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         handle_reboot,
         schema=vol.Schema({}),
     )
+
+    async def handle_ptz_move(call: ServiceCall) -> None:
+        """Handle PTZ movement service call."""
+        channel = call.data.get("channel", 1)
+        cmd_name = call.data.get("command", "up").lower()
+        speed = call.data.get("speed", 5)
+        ptz_cmd = PTZ_COMMANDS.get(cmd_name, "Up")
+        await client.async_ptz_control(channel=channel, code=ptz_cmd, arg2=speed, stop=False)
+
+    async def handle_ptz_stop(call: ServiceCall) -> None:
+        """Handle PTZ stop service call."""
+        channel = call.data.get("channel", 1)
+        cmd_name = call.data.get("command", "up").lower()
+        ptz_cmd = PTZ_COMMANDS.get(cmd_name, "Up")
+        await client.async_ptz_control(channel=channel, code=ptz_cmd, stop=True)
+
+    async def handle_ptz_preset(call: ServiceCall) -> None:
+        """Handle PTZ preset jump service call."""
+        channel = call.data.get("channel", 1)
+        preset = call.data.get("preset", 1)
+        await client.async_ptz_preset(channel=channel, preset=preset)
+
+    if not hass.services.has_service(DOMAIN, "ptz_move"):
+        hass.services.async_register(
+            DOMAIN,
+            "ptz_move",
+            handle_ptz_move,
+            schema=vol.Schema(
+                {
+                    vol.Optional("channel", default=1): cv.positive_int,
+                    vol.Required("command"): cv.string,
+                    vol.Optional("speed", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=8)),
+                }
+            ),
+        )
+
+    if not hass.services.has_service(DOMAIN, "ptz_stop"):
+        hass.services.async_register(
+            DOMAIN,
+            "ptz_stop",
+            handle_ptz_stop,
+            schema=vol.Schema(
+                {
+                    vol.Optional("channel", default=1): cv.positive_int,
+                    vol.Optional("command", default="up"): cv.string,
+                }
+            ),
+        )
+
+    if not hass.services.has_service(DOMAIN, "ptz_preset"):
+        hass.services.async_register(
+            DOMAIN,
+            "ptz_preset",
+            handle_ptz_preset,
+            schema=vol.Schema(
+                {
+                    vol.Optional("channel", default=1): cv.positive_int,
+                    vol.Required("preset"): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
+                }
+            ),
+        )
 
     return True
 

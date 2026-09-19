@@ -380,6 +380,26 @@ class CPPlusClient:
         except Exception as err:
             _LOGGER.debug("Could not query RemoteDevice: %s", err)
 
+        video_mode_map: dict[int, int] = {}
+        try:
+            vim_res = await self.async_nvr_request("/cgi-bin/configManager.cgi?action=getConfig&name=VideoInMode")
+            for line in vim_res.splitlines():
+                m_vim = re.match(r"table\.VideoInMode\[(\d+)\]\.Mode=(\d+)", line.strip())
+                if m_vim:
+                    video_mode_map[int(m_vim.group(1))] = int(m_vim.group(2))
+        except Exception as err:
+            _LOGGER.debug("Could not query VideoInMode: %s", err)
+
+        lighting_map: dict[int, str] = {}
+        try:
+            light_res = await self.async_nvr_request("/cgi-bin/configManager.cgi?action=getConfig&name=Lighting")
+            for line in light_res.splitlines():
+                m_light = re.match(r"table\.Lighting\[(\d+)\]\[0\]\.Mode=([a-zA-Z0-9]+)", line.strip())
+                if m_light:
+                    lighting_map[int(m_light.group(1))] = m_light.group(2)
+        except Exception as err:
+            _LOGGER.debug("Could not query Lighting: %s", err)
+
         channels: list[dict[str, Any]] = []
         for idx, name in sorted(title_map.items()):
             if not name or (name.startswith("Channel") and idx >= 17):
@@ -423,6 +443,8 @@ class CPPlusClient:
                 "smd_human": smd_info.get("human", False) and smd_info.get("enable", False),
                 "smd_vehicle": smd_info.get("vehicle", False) and smd_info.get("enable", False),
                 "tripwire": tripwire_map.get(idx, False),
+                "video_in_mode": video_mode_map.get(idx, 0),
+                "lighting_mode": lighting_map.get(idx, "Auto"),
             })
 
         self._channels = channels
@@ -602,9 +624,117 @@ class CPPlusClient:
             _LOGGER.debug("HTTP snapshot failed for %s: %s", self.host, err)
         return None
 
+    async def async_set_video_in_mode(self, channel_idx: int, mode: int) -> bool:
+        """Set VideoInMode (Day/Night) for a channel: 0=Color, 1=Auto, 2=Black & White."""
+        if self.device_type != TYPE_NVR:
+            return False
+        uri = f"/cgi-bin/configManager.cgi?action=setConfig&VideoInMode[{channel_idx}].Mode={mode}"
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("Failed to set VideoInMode on channel %d: %s", channel_idx, err)
+            return False
+
+    async def async_set_lighting_mode(self, channel_idx: int, mode: str) -> bool:
+        """Set Lighting mode for a channel: Auto, Manual, Off."""
+        if self.device_type != TYPE_NVR:
+            return False
+        uri = f"/cgi-bin/configManager.cgi?action=setConfig&Lighting[{channel_idx}][0].Mode={mode}"
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("Failed to set Lighting mode on channel %d: %s", channel_idx, err)
+            return False
+
+    async def async_set_smd_human(self, channel_idx: int, enable: bool) -> bool:
+        """Enable or disable SmartMotionDetect Human recognition on a channel."""
+        if self.device_type != TYPE_NVR:
+            return False
+        en_str = "true" if enable else "false"
+        uri = (
+            f"/cgi-bin/configManager.cgi?action=setConfig"
+            f"&SmartMotionDetect[{channel_idx}].Enable=true"
+            f"&SmartMotionDetect[{channel_idx}].ObjectTypes.Human={en_str}"
+        )
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("Failed to set SMD Human on channel %d: %s", channel_idx, err)
+            return False
+
+    async def async_set_smd_vehicle(self, channel_idx: int, enable: bool) -> bool:
+        """Enable or disable SmartMotionDetect Vehicle recognition on a channel."""
+        if self.device_type != TYPE_NVR:
+            return False
+        en_str = "true" if enable else "false"
+        uri = (
+            f"/cgi-bin/configManager.cgi?action=setConfig"
+            f"&SmartMotionDetect[{channel_idx}].Enable=true"
+            f"&SmartMotionDetect[{channel_idx}].ObjectTypes.Vehicle={en_str}"
+        )
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("Failed to set SMD Vehicle on channel %d: %s", channel_idx, err)
+            return False
+
+    async def async_set_tripwire(self, channel_idx: int, enable: bool) -> bool:
+        """Enable or disable CrossLineDetection (Tripwire) on a channel."""
+        if self.device_type != TYPE_NVR:
+            return False
+        en_str = "true" if enable else "false"
+        uri = f"/cgi-bin/configManager.cgi?action=setConfig&CrossLineDetection[{channel_idx}].Enable={en_str}"
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("Failed to set CrossLineDetection on channel %d: %s", channel_idx, err)
+            return False
+
+    async def async_ptz_control(
+        self,
+        channel: int,
+        code: str,
+        arg1: int = 0,
+        arg2: int = 5,
+        arg3: int = 0,
+        stop: bool = False,
+    ) -> bool:
+        """Send PTZ movement or zoom command to camera channel."""
+        if self.device_type != TYPE_NVR:
+            return False
+        action = "stop" if stop else "start"
+        uri = (
+            f"/cgi-bin/ptz.cgi?action={action}"
+            f"&channel={channel}&code={code}&arg1={arg1}&arg2={arg2}&arg3={arg3}"
+        )
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("PTZ control failed on channel %d (%s): %s", channel, code, err)
+            return False
+
+    async def async_ptz_preset(self, channel: int, preset: int) -> bool:
+        """Command PTZ to move to configured preset number."""
+        if self.device_type != TYPE_NVR:
+            return False
+        uri = f"/cgi-bin/ptz.cgi?action=start&channel={channel}&code=GotoPreset&arg1=0&arg2={preset}&arg3=0"
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("PTZ preset %d failed on channel %d: %s", preset, channel, err)
+            return False
+
     async def async_close(self) -> None:
         """Close background connections and session."""
         self._stopped = True
         if not self._external_session and self._session and not self._session.closed:
             await self._session.close()
+
 

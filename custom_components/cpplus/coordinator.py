@@ -58,6 +58,20 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             events[EVENT_MOTION] = is_active
             _LOGGER.debug("Channel %d VideoMotion: %s", channel_idx, is_active)
 
+        # Fire native Home Assistant event for automation triggers
+        ch = next((c for c in self.channels if c.get("index") == channel_idx or c.get("channel") == channel_idx + 1), {})
+        ch_name = ch.get("name") or f"Channel {channel_idx + 1}"
+        self.hass.bus.async_fire(
+            "cpplus_event",
+            {
+                "channel": channel_idx + 1,
+                "channel_index": channel_idx,
+                "channel_name": ch_name,
+                "event_type": event_code,
+                "action": action,
+            },
+        )
+
         # Notify entity listeners immediately without waiting for polling loop
         if self.data:
             new_data = dict(self.data)
@@ -71,8 +85,7 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.device_info_data = await self.client.async_get_device_info()
 
             if self.client.device_type == TYPE_NVR:
-                if not self.channels:
-                    self.channels = await self.client.async_get_channels()
+                self.channels = await self.client.async_get_channels()
                 # Test connection
                 await self.client.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
             else:
