@@ -129,6 +129,10 @@ This document serves as the primary technical context, architectural briefing, a
 * **Manufacturer**: Must remain strictly **`CP PLUS`**.
 * **Zero Plaintext Secrets**: Passwords must never be output into logs, terminal stdout, git commits, or chat text.
 
+### Invariant 6: Native WebRTC Offer Delegation (`async_handle_async_webrtc_offer`)
+* **Problem**: Standard RTSP camera entities in Home Assistant advertise both `HLS` and `WebRTC`. Dashboard cards (`picture-glance`, `picture-entity`) prioritize `HLS`, which cannot play G.711A (`pcm_alaw`) audio in web browsers.
+* **Enforced Solution**: `CPPlusCamera` overrides `async_handle_async_webrtc_offer` and `async_on_webrtc_candidate`, delegating directly to `async_get_supported_provider(self.hass, self)` (e.g. `go2rtc`). This causes Home Assistant's `camera_capabilities` to advertise `StreamType.WEB_RTC` exclusively, forcing dashboard cards to stream over WebRTC with real-time video and native G.711A audio.
+
 ---
 
 ## 5. Repository File Structure

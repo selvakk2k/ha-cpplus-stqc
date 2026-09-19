@@ -29,6 +29,7 @@ Zero-cloud, 100% local Home Assistant integration for CP PLUS STQC IP cameras, N
   - **NVR Hub Mode**: Connects to the central NVR, auto-discovers all active channels, creates child devices for each camera, and streams real-time AI push events.
   - **Direct Camera Mode**: Connects directly to standalone STQC IP cameras via native `cpapi2` HTTPS JSON-RPC.
 - **Dual-Stream RTSP Video**: Provides dedicated entities for Main (high resolution) and Sub (low bandwidth) video feeds with credentials encoding.
+- **Native WebRTC Streaming & Live Audio**: Directly implements WebRTC offer handling (`async_handle_async_webrtc_offer`) to prioritize WebRTC in Home Assistant dashboard cards, enabling sub-second latency and native G.711A audio playback.
 - **Live Snapshot Previews**: Captures instant JPEG snapshots via authenticated Digest requests with automated challenge-response retries.
 - **Real-Time Push Event Dispatch**: Continuous HTTP chunked listener on `eventManager.cgi` providing instant binary sensor triggers:
   - Smart Motion Detection (SMD Plus) **Human Detection**
