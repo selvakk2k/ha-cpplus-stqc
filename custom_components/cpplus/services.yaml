@@ -1,0 +1,3 @@
+reboot:
+  name: Reboot Device
+  description: Reboots the CP PLUS camera or NVR hardware remotely.

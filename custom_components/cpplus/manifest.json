@@ -1,0 +1,10 @@
+{
+  "domain": "cpplus",
+  "name": "CP PLUS STQC",
+  "codeowners": ["@selvakk2k"],
+  "config_flow": true,
+  "documentation": "https://github.com/selvakk2k/associationsmart",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "version": "1.0.0"
+}

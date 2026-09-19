@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add CP PLUS STQC Camera",
+        "description": "Enter the connection details for your CP PLUS camera.",
+        "data": {
+          "host": "IP Address",
+          "username": "Username",
+          "password": "Password",
+          "name": "Camera Name (e.g. Floor 2, Parking)",
+          "port": "HTTPS Port (Default: 443)",
+          "rtsp_port": "RTSP Port (Default: 554)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the CP PLUS camera. Check IP and port.",
+      "invalid_auth": "Invalid username or password.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This CP PLUS camera is already configured."
+    }
+  }
+}
