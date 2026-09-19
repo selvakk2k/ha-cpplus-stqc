@@ -174,4 +174,5 @@ class CPPlusChannelEventSensor(CoordinatorEntity[CPPlusDataUpdateCoordinator], B
     @property
     def available(self) -> bool:
         """Return true if NVR is online."""
-        return bool(self.coordinator.data and self.coordinator.data.get("online", False))
+        return super().available and bool(self.coordinator.data and self.coordinator.data.get("online", False))
+

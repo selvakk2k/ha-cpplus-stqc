@@ -52,7 +52,8 @@ class CPPlusRebootButton(CoordinatorEntity[CPPlusDataUpdateCoordinator], ButtonE
     @property
     def available(self) -> bool:
         """Return true if entity is available."""
-        return bool(self.coordinator.data and self.coordinator.data.get("online", False))
+        return super().available and bool(self.coordinator.data and self.coordinator.data.get("online", False))
+
 
     async def async_press(self) -> None:
         """Handle button press."""

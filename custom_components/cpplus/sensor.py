@@ -59,7 +59,8 @@ class CPPlusDiagnosticSensor(CoordinatorEntity[CPPlusDataUpdateCoordinator], Sen
     @property
     def available(self) -> bool:
         """Return true if entity is available."""
-        return bool(self.coordinator.data and self.coordinator.data.get("online", False))
+        return super().available and bool(self.coordinator.data and self.coordinator.data.get("online", False))
+
 
     @property
     def native_value(self) -> str | None:

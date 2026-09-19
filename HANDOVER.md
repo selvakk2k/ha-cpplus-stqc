@@ -14,7 +14,7 @@ This document serves as the primary technical context, architectural briefing, a
 * **Verification Milestones (Hardware Verified)**:
   - **NVR Hub Communication**: Authenticated HTTP Digest CGI over HTTPS port 443 with self-signed SSL verification bypass.
   - **Real-Time Push Event Stream**: Continuous HTTP chunked listener on `/cgi-bin/eventManager.cgi?action=attach&codes=[All]`, driving instant state updates for AI Human Detection, Vehicle Detection, Tripwire Breaches, and Motion.
-  - **Gate Camera Audio (`192.168.1.101` & `192.168.1.102`)**: Direct NetSDK binary packet configuration on port 34567 via [`scripts/configure_gate_audio.py`](file:///home/skk/Documents/antigravity/associationsmart/scripts/configure_gate_audio.py), enabling `AudioEnable` on Main and Sub streams directly in non-volatile EEPROM (`pcm_alaw`).
+  - **Gate Camera Audio (`192.168.1.101` & `192.168.1.102`)**: Direct NetSDK binary packet configuration on port 34567 via [`scripts/configure_gate_audio.py`](scripts/configure_gate_audio.py), enabling `AudioEnable` on Main and Sub streams directly in non-volatile EEPROM (`pcm_alaw`).
   - **Live RTSP Streaming**: Validated via `ffprobe` across both Main (`subtype=0`) and Sub (`subtype=1`) streams (`ExitCode=0`, `video:hevc`, `audio:pcm_alaw`).
   - **Snapshot Previews**: Binary JPEG extraction via `async_nvr_request_bytes()` with automatic HTTP 401 Digest challenge-response retry.
   - **Home Assistant 2026 Registry Compliance**: Fixed `RuntimeError` by pre-registering the parent NVR device and using `via_device_id` for all child camera devices.
@@ -52,7 +52,7 @@ This document serves as the primary technical context, architectural briefing, a
 
 ### A. Central NVR Hub (`192.168.1.100:443`)
 * **Transport**: HTTPS port 443 with self-signed SSL.
-* **Authentication**: HTTP Digest Authentication (`AsyncDigestAuth` in [`client.py`](file:///home/skk/Documents/antigravity/associationsmart/custom_components/cpplus/client.py#L35-L95)).
+* **Authentication**: HTTP Digest Authentication (`AsyncDigestAuth` in [`client.py`](custom_components/cpplus/client.py#L35-L95)).
 * **Channel & Configuration Discovery**:
   - `ChannelTitle`: `/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle` (Camera names).
   - `RemoteDevice`: `/cgi-bin/configManager.cgi?action=getConfig&name=RemoteDevice` (Hardware models, IPs, serial numbers, firmware versions, ports).
@@ -84,7 +84,7 @@ This document serves as the primary technical context, architectural briefing, a
 * **Transport**: Xiongmai NetSDK binary protocol on TCP port `34567`.
 * **Mechanics**:
   - The Goke GK7205V200 encoder defaults to video-only RTSP streaming.
-  - Script [`scripts/configure_gate_audio.py`](file:///home/skk/Documents/antigravity/associationsmart/scripts/configure_gate_audio.py) logs into the NetSDK daemon, reads `Simplify.Encode`, sets `AudioEnable=true` on Main and Sub streams, and issues a non-volatile EEPROM save (`OPNetManager / EEPROM Commit`).
+  - Script [`scripts/configure_gate_audio.py`](scripts/configure_gate_audio.py) logs into the NetSDK daemon, reads `Simplify.Encode`, sets `AudioEnable=true` on Main and Sub streams, and issues a non-volatile EEPROM save (`OPNetManager / EEPROM Commit`).
 
 ---
 
