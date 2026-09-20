@@ -37,7 +37,10 @@ class AsyncDigestAuth:
             self.realm = realm_m.group(1)
         nonce_m = re.search(r'nonce="([^"]+)"', header)
         if nonce_m:
-            self.nonce = nonce_m.group(1)
+            new_nonce = nonce_m.group(1)
+            if new_nonce != self.nonce:
+                self.nonce = new_nonce
+                self.nc = 0
         qop_m = re.search(r'qop="?([^",\s]+)"?', header)
         self.qop = qop_m.group(1) if qop_m else None
         opaque_m = re.search(r'opaque="([^"]*)"', header)
