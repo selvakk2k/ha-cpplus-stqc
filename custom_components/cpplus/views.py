@@ -62,10 +62,13 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
         _LOGGER.debug("Starting fMP4 playback stream from: %s", rtsp_url)
 
         coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
-        is_native = True
+        needs_hevc_transcode = False
         if coordinator and hasattr(coordinator, "channels"):
             ch_info = next((c for c in coordinator.channels if c.get("channel") == channel), {})
-            is_native = ch_info.get("is_native_cpplus", True)
+            model = str(ch_info.get("model", "")).upper()
+            # Xiongmai cameras (IPC_GK*) stream in HEVC/H.265; transcode to H.264 for browsers
+            if "IPC_GK" in model:
+                needs_hevc_transcode = True
 
         cmd = [
             "ffmpeg",
@@ -77,11 +80,12 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
             "-map", "0:a?",
         ]
 
-        if is_native:
-            cmd.extend(["-c:v", "copy"])
-        else:
-            # Third-party / ONVIF cameras default to H.265 (HEVC), transcode to ultrafast H.264
+        if needs_hevc_transcode:
+            # Transcode HEVC/H.265 to ultrafast H.264
             cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
+        else:
+            # Native H.264 streams (CP PLUS CP-*, Onvif P03H41, Dahua VTO*) use direct stream copy
+            cmd.extend(["-c:v", "copy"])
 
         cmd.extend([
             "-c:a", "aac",

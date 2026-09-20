@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
-from homeassistant.helpers import config_validation as cv, device_registry as dr
+from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
 import voluptuous as vol
 
 from .views import CPPlusPlaybackMediaView
@@ -88,6 +88,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+ 
+    # Purge orphaned switch and select entities for non-native camera channels
+    if client.device_type == TYPE_NVR and coordinator.channels:
+        ent_reg = er.async_get(hass)
+        non_native_channels = {
+            ch["channel"] for ch in coordinator.channels if not ch.get("is_native_cpplus", False)
+        }
+        for entity_entry in list(ent_reg.entities.values()):
+            ent_domain = getattr(entity_entry, "domain", entity_entry.entity_id.split(".", 1)[0])
+            if entity_entry.config_entry_id == entry.entry_id and ent_domain in ("switch", "select"):
+                for ch_num in non_native_channels:
+                    prefix = f"{serial}_ch{ch_num}_"
+                    if entity_entry.unique_id.startswith(prefix):
+                        _LOGGER.warning(
+                            "Purging orphaned %s entity %s (%s) for non-native channel %d",
+                            ent_domain,
+                            entity_entry.entity_id,
+                            entity_entry.unique_id,
+                            ch_num,
+                        )
+                        ent_reg.async_remove(entity_entry.entity_id)
+                        break
 
     async def handle_reboot(call: ServiceCall) -> None:
         """Handle reboot service call."""
