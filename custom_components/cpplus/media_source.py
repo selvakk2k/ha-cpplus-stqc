@@ -192,8 +192,12 @@ class CPPlusMediaSource(MediaSource):
             mins = duration_sec // 60
             secs = duration_sec % 60
 
+            start_full = rec.get("start_time", "")
+            end_full = rec.get("end_time", "")
             path_encoded = urllib.parse.quote(path, safe="")
-            clip_id = f"{entry_id}/{channel}/{date_str}/{path_encoded}"
+            start_encoded = urllib.parse.quote(start_full, safe="")
+            end_encoded = urllib.parse.quote(end_full, safe="")
+            clip_id = f"{entry_id}/{channel}/{date_str}/{start_encoded}/{end_encoded}/{path_encoded}"
 
             title = f"{rec_start} - {rec_end} [{event_type}] ({mins}m {secs:02d}s, {size_mb} MB)"
             children.append(
@@ -227,9 +231,19 @@ class CPPlusMediaSource(MediaSource):
 
         entry_id = parts[0]
         channel = int(parts[1])
-        path_encoded = parts[3]
-        file_path = urllib.parse.unquote(path_encoded)
+        date_str = parts[2]
 
-        # Stream via Home Assistant playback proxy view
-        stream_url = f"/api/cpplus/playback/{entry_id}/{channel}?file={urllib.parse.quote(file_path)}"
+        if len(parts) >= 6:
+            start_time = urllib.parse.unquote(parts[3])
+            end_time = urllib.parse.unquote(parts[4])
+            file_path = urllib.parse.unquote(parts[5])
+            stream_url = (
+                f"/api/cpplus/playback/{entry_id}/{channel}?"
+                f"start={urllib.parse.quote(start_time)}&end={urllib.parse.quote(end_time)}&file={urllib.parse.quote(file_path)}"
+            )
+        else:
+            path_encoded = parts[3]
+            file_path = urllib.parse.unquote(path_encoded)
+            stream_url = f"/api/cpplus/playback/{entry_id}/{channel}?file={urllib.parse.quote(file_path)}"
+
         return PlayMedia(stream_url, "video/mp4")

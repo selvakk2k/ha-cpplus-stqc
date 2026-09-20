@@ -728,12 +728,21 @@ class CPPlusClient:
         val = "true" if enable else "false"
         uri = (
             f"/cgi-bin/configManager.cgi?action=setConfig"
-            f"&Encode[{channel_idx}].MainFormat[0].Audio.Enable={val}"
-            f"&Encode[{channel_idx}].MainFormat[0].AudioEnable={val}"
+            f"&table.Encode[{channel_idx}].MainFormat[0].AudioEnable={val}"
+            f"&table.Encode[{channel_idx}].ExtraFormat[0].AudioEnable={val}"
         )
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            if "ok" in res.lower():
+                return True
+            # Fallback without 'table.' prefix if NVR firmware prefers Encode[x]
+            fallback_uri = (
+                f"/cgi-bin/configManager.cgi?action=setConfig"
+                f"&Encode[{channel_idx}].MainFormat[0].AudioEnable={val}"
+                f"&Encode[{channel_idx}].ExtraFormat[0].AudioEnable={val}"
+            )
+            res2 = await self.async_nvr_request(fallback_uri)
+            return "ok" in res2.lower()
         except Exception as err:
             _LOGGER.error("Failed to set audio enable on channel %d: %s", channel_idx, err)
             return False
