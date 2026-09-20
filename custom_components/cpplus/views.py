@@ -243,6 +243,20 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
 
             feeder_task = asyncio.create_task(feed_stdin())
 
+            first_chunk = await proc.stdout.read(65536)
+            if not first_chunk:
+                stderr_data = await proc.stderr.read()
+                _LOGGER.warning(
+                    "ffmpeg file transcode produced no output for channel %d (file: %s). Exit code: %s. Stderr: %s",
+                    channel,
+                    file_path,
+                    proc.returncode,
+                    stderr_data.decode("utf-8", errors="replace"),
+                )
+                feeder_task.cancel()
+                resp.close()
+                return web.Response(status=502, text="Transcode failed to produce video")
+
             response = web.StreamResponse(
                 status=200,
                 headers={
@@ -254,6 +268,7 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
                 },
             )
             await response.prepare(request)
+            await response.write(first_chunk)
 
             try:
                 while True:

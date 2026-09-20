@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import base64
 from datetime import datetime, timedelta
+import json
 import logging
 from typing import Any
 import urllib.parse
@@ -205,10 +207,10 @@ class CPPlusMediaSource(MediaSource):
 
             start_full = rec.get("start_time", "")
             end_full = rec.get("end_time", "")
-            path_encoded = urllib.parse.quote(path, safe="")
-            start_encoded = urllib.parse.quote(start_full, safe="")
-            end_encoded = urllib.parse.quote(end_full, safe="")
-            clip_id = f"{entry_id}/{channel}/{date_str}/{start_encoded}/{end_encoded}/{path_encoded}"
+            # Encode metadata into a compact URL-safe Base64 token to prevent HA router slash splitting
+            payload_str = json.dumps({"s": start_full, "e": end_full, "p": path})
+            token = base64.urlsafe_b64encode(payload_str.encode("utf-8")).decode("ascii").rstrip("=")
+            clip_id = f"{entry_id}/{channel}/{date_str}/{token}"
 
             title = f"{rec_start} - {rec_end} [{event_badge}] ({mins}m {secs:02d}s, {size_mb} MB)"
             children.append(
@@ -242,30 +244,45 @@ class CPPlusMediaSource(MediaSource):
 
         entry_id = parts[0]
         channel = int(parts[1])
+        token = parts[3]
 
-        # Supported identifier formats:
-        # 1) entry_id/channel/date/category/start/end/path (7 parts)
-        # 2) entry_id/channel/date/start/end/path          (6 parts)
-        # 3) entry_id/channel/date/path                    (4 parts)
-        if len(parts) >= 7:
-            start_time = urllib.parse.unquote(parts[4])
-            end_time = urllib.parse.unquote(parts[5])
-            file_path = urllib.parse.unquote(parts[6])
-            stream_url = (
-                f"/api/cpplus/playback/{entry_id}/{channel}?"
-                f"start={urllib.parse.quote(start_time)}&end={urllib.parse.quote(end_time)}&file={urllib.parse.quote(file_path)}"
-            )
-        elif len(parts) == 6:
-            start_time = urllib.parse.unquote(parts[3])
-            end_time = urllib.parse.unquote(parts[4])
-            file_path = urllib.parse.unquote(parts[5])
-            stream_url = (
-                f"/api/cpplus/playback/{entry_id}/{channel}?"
-                f"start={urllib.parse.quote(start_time)}&end={urllib.parse.quote(end_time)}&file={urllib.parse.quote(file_path)}"
-            )
-        else:
-            path_encoded = parts[3]
-            file_path = urllib.parse.unquote(path_encoded)
-            stream_url = f"/api/cpplus/playback/{entry_id}/{channel}?file={urllib.parse.quote(file_path)}"
+        start_time = None
+        end_time = None
+        file_path = None
+
+        # Try base64 json token decode first (format: entry_id/channel/date/token)
+        try:
+            padded = token + "=" * (-len(token) % 4)
+            data = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+            if isinstance(data, dict):
+                start_time = data.get("s")
+                end_time = data.get("e")
+                file_path = data.get("p")
+        except Exception:
+            pass
+
+        # Legacy fallback if token wasn't valid base64 json
+        if not file_path:
+            if len(parts) >= 7:
+                start_time = urllib.parse.unquote(parts[4])
+                end_time = urllib.parse.unquote(parts[5])
+                file_path = urllib.parse.unquote(parts[6])
+            elif len(parts) == 6:
+                start_time = urllib.parse.unquote(parts[3])
+                end_time = urllib.parse.unquote(parts[4])
+                file_path = urllib.parse.unquote(parts[5])
+            else:
+                file_path = urllib.parse.unquote(parts[3])
+
+        query_params = []
+        if start_time:
+            query_params.append(f"start={urllib.parse.quote(start_time)}")
+        if end_time:
+            query_params.append(f"end={urllib.parse.quote(end_time)}")
+        if file_path:
+            query_params.append(f"file={urllib.parse.quote(file_path)}")
+
+        qs = f"?{'&'.join(query_params)}" if query_params else ""
+        stream_url = f"/api/cpplus/playback/{entry_id}/{channel}{qs}"
 
         return PlayMedia(stream_url, "video/mp4")

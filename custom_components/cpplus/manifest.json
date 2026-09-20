@@ -3,10 +3,11 @@
   "name": "CP PLUS STQC",
   "codeowners": ["@selvakk2k"],
   "config_flow": true,
+  "dependencies": ["http"],
   "documentation": "https://github.com/selvakk2k/ha-cpplus-stqc",
-  "issue_tracker": "https://github.com/selvakk2k/ha-cpplus-stqc/issues",
   "integration_type": "hub",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/selvakk2k/ha-cpplus-stqc/issues",
   "version": "1.2.0"
 }
 
