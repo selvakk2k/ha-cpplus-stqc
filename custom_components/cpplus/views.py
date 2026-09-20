@@ -38,13 +38,18 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
         end_time = request.query.get("end")
         file_path = request.query.get("file")
 
-        # If start and end timestamps are present, stream live fMP4 from the NVR RTSP playback server
+        # For .cpv files (e.g. Xiongmai gate cameras on port 8899), the NVR does not serve RTSP playback;
+        # stream and transcode the raw file directly via ffmpeg stdin pipe into fragmented MP4
+        if file_path and file_path.lower().endswith(".cpv"):
+            return await self._stream_file_transcode(request, client, file_path, int(channel), entry_id)
+
+        # If start and end timestamps are present, stream live fMP4 from the NVR RTSP playback server (.dav files)
         if start_time and end_time:
             return await self._stream_rtsp_fmp4(request, client, int(channel), start_time, end_time, entry_id)
 
-        # Fallback to direct raw file proxy with DigestAuth
+        # Fallback to file transcode proxy
         if file_path:
-            return await self._stream_file(request, client, file_path)
+            return await self._stream_file_transcode(request, client, file_path, int(channel), entry_id)
 
         return web.Response(status=400, text="Missing start/end or file query parameter")
 
@@ -81,8 +86,13 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
         ]
 
         if needs_hevc_transcode:
-            # Transcode HEVC/H.265 to ultrafast H.264
-            cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
+            # Transcode HEVC/H.265 to ultrafast H.264 with standard web-compatible YUV420P pixel format
+            cmd.extend([
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-pix_fmt", "yuv420p",
+            ])
         else:
             # Native H.264 streams (CP PLUS CP-*, Onvif P03H41, Dahua VTO*) use direct stream copy
             cmd.extend(["-c:v", "copy"])
@@ -119,11 +129,23 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
         await response.prepare(request)
 
         try:
-            while True:
-                chunk = await proc.stdout.read(65536)
-                if not chunk:
-                    break
-                await response.write(chunk)
+            # Read first chunk to ensure stream initialization
+            first_chunk = await proc.stdout.read(65536)
+            if not first_chunk:
+                stderr_data = await proc.stderr.read()
+                _LOGGER.warning(
+                    "ffmpeg produced no video stream data for channel %d (model: %s). ffmpeg stderr: %s",
+                    channel,
+                    model if "model" in locals() else "unknown",
+                    stderr_data.decode("utf-8", errors="replace"),
+                )
+            else:
+                await response.write(first_chunk)
+                while True:
+                    chunk = await proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    await response.write(chunk)
         except (asyncio.CancelledError, ConnectionResetError):
             _LOGGER.debug("Client disconnected from playback stream")
         finally:
@@ -131,6 +153,15 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
                 if proc.returncode is None:
                     proc.terminate()
                     await asyncio.wait_for(proc.wait(), timeout=3.0)
+                elif proc.returncode != 0:
+                    stderr_data = await proc.stderr.read()
+                    if stderr_data:
+                        _LOGGER.warning(
+                            "ffmpeg for channel %d exited with code %s: %s",
+                            channel,
+                            proc.returncode,
+                            stderr_data.decode("utf-8", errors="replace"),
+                        )
             except Exception:
                 try:
                     proc.kill()
@@ -140,14 +171,15 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
 
         return response
 
-    async def _stream_file(
-        self, request: web.Request, client: Any, file_path: str
+    async def _stream_file_transcode(
+        self, request: web.Request, client: Any, file_path: str, channel: int, entry_id: str
     ) -> web.StreamResponse:
-        """Stream raw file from NVR with robust Digest authentication."""
+        """Stream and transcode NVR recorded file (.cpv or .dav) into fragmented MP4 via ffmpeg."""
         if not client._digest_auth:
             client._digest_auth = AsyncDigestAuth(client.username, client.password)
 
-        load_uri = f"/cgi-bin/RPC_Loadfile/{urllib.parse.quote(file_path, safe='/')}"
+        file_clean = file_path.lstrip("/")
+        load_uri = f"/cgi-bin/RPC_Loadfile/{urllib.parse.quote(file_clean, safe='/')}"
 
         try:
             session = await client._get_session()
@@ -156,48 +188,105 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
             if client._digest_auth.realm and client._digest_auth.nonce:
                 headers["Authorization"] = client._digest_auth.build_header("GET", load_uri)
 
-            range_hdr = request.headers.get("Range")
-            if range_hdr:
-                headers["Range"] = range_hdr
+            resp = await session.get(url, headers=headers)
+            if resp.status == 401:
+                auth_hdr = resp.headers.get("WWW-Authenticate", "")
+                if "Digest" in auth_hdr:
+                    client._digest_auth.parse_challenge(auth_hdr)
+                    headers["Authorization"] = client._digest_auth.build_header("GET", load_uri)
+                    resp = await session.get(url, headers=headers)
 
-            async with session.get(url, headers=headers) as resp:
-                if resp.status == 401:
-                    auth_hdr = resp.headers.get("WWW-Authenticate", "")
-                    if "Digest" in auth_hdr:
-                        client._digest_auth.parse_challenge(auth_hdr)
-                        headers["Authorization"] = client._digest_auth.build_header("GET", load_uri)
-                        async with session.get(url, headers=headers) as retry_resp:
-                            return await self._pipe_response(request, retry_resp)
+            if resp.status != 200:
+                _LOGGER.warning(
+                    "Failed to fetch file from NVR: %s (status: %d)", load_uri, resp.status
+                )
+                return web.Response(status=resp.status, text=f"NVR file error: {resp.status}")
 
-                return await self._pipe_response(request, resp)
+            cmd = [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "warning",
+                "-i", "pipe:0",
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-tune", "zerolatency",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "128k",
+                "-f", "mp4",
+                "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+                "-reset_timestamps", "1",
+                "-",
+            ]
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            async def feed_stdin():
+                try:
+                    async for chunk in resp.content.iter_chunked(65536):
+                        if proc.stdin and not proc.stdin.is_closing():
+                            proc.stdin.write(chunk)
+                            await proc.stdin.drain()
+                except Exception as err:
+                    _LOGGER.debug("Error feeding ffmpeg stdin: %s", err)
+                finally:
+                    try:
+                        if proc.stdin and not proc.stdin.is_closing():
+                            proc.stdin.close()
+                    except Exception:
+                        pass
+
+            feeder_task = asyncio.create_task(feed_stdin())
+
+            response = web.StreamResponse(
+                status=200,
+                headers={
+                    "Content-Type": "video/mp4",
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "Pragma": "no-cache",
+                    "Expires": "0",
+                },
+            )
+            await response.prepare(request)
+
+            try:
+                while True:
+                    chunk = await proc.stdout.read(65536)
+                    if not chunk:
+                        break
+                    await response.write(chunk)
+            except (asyncio.CancelledError, ConnectionResetError):
+                _LOGGER.debug("Client disconnected from file transcode stream")
+            finally:
+                feeder_task.cancel()
+                resp.close()
+                try:
+                    if proc.returncode is None:
+                        proc.terminate()
+                        await asyncio.wait_for(proc.wait(), timeout=3.0)
+                    elif proc.returncode != 0:
+                        stderr_data = await proc.stderr.read()
+                        if stderr_data:
+                            _LOGGER.warning(
+                                "ffmpeg file transcode for channel %d exited with code %s: %s",
+                                channel,
+                                proc.returncode,
+                                stderr_data.decode("utf-8", errors="replace"),
+                            )
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                await response.write_eof()
+
+            return response
         except Exception as err:
-            _LOGGER.error("Playback proxy streaming error on %s: %s", client.host, err)
-            return web.Response(status=500, text=f"Streaming error: {err}")
-
-    async def _pipe_response(
-        self, request: web.Request, nvr_resp: web.ClientResponse
-    ) -> web.StreamResponse:
-        """Pipe NVR HTTP response back to the client with appropriate headers."""
-        status = nvr_resp.status
-        content_type = nvr_resp.headers.get("Content-Type", "video/mp4")
-        if "application/octet-stream" in content_type:
-            content_type = "video/mp4"
-
-        response = web.StreamResponse(
-            status=status,
-            headers={
-                "Content-Type": content_type,
-                "Accept-Ranges": "bytes",
-                "Access-Control-Allow-Origin": "*",
-            },
-        )
-        if "Content-Length" in nvr_resp.headers:
-            response.headers["Content-Length"] = nvr_resp.headers["Content-Length"]
-        if "Content-Range" in nvr_resp.headers:
-            response.headers["Content-Range"] = nvr_resp.headers["Content-Range"]
-
-        await response.prepare(request)
-        async for chunk in nvr_resp.content.iter_chunked(65536):
-            await response.write(chunk)
-        await response.write_eof()
-        return response
+            _LOGGER.error("File transcode error on %s: %s", client.host, err)
+            return web.Response(status=500, text=f"File transcode error: {err}")

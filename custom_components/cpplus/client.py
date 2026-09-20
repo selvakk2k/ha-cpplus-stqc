@@ -571,8 +571,19 @@ class CPPlusClient:
                 for line in sys_res.splitlines():
                     if line.startswith("serialNumber="):
                         serial = line.split("=", 1)[1].strip()
+                    elif line.startswith("appVersion="):
+                        firmware = line.split("=", 1)[1].strip()
             except Exception as err:
                 _LOGGER.debug("NVR getSystemInfo error on %s: %s", self.host, err)
+
+            if firmware == "Unknown":
+                try:
+                    ver_res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=getSoftwareVersion")
+                    for line in ver_res.splitlines():
+                        if line.startswith("version="):
+                            firmware = line.split("=", 1)[1].strip()
+                except Exception as err:
+                    _LOGGER.debug("NVR getSoftwareVersion error on %s: %s", self.host, err)
 
             self._device_info = {
                 "serial": serial,
