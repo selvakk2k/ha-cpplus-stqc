@@ -119,3 +119,84 @@ ptz_preset:
           min: 1
           max: 255
           mode: box
+
+play_recording:
+  name: Play Historical Recording
+  description: Plays recorded surveillance footage from the NVR for a specific channel and time range on a media player.
+  fields:
+    channel:
+      name: Channel
+      description: Camera channel number on the NVR (1-indexed).
+      required: false
+      default: 1
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 32
+          mode: box
+    start_time:
+      name: Start Time
+      description: Beginning timestamp in YYYY-MM-DD HH:MM:SS format.
+      required: true
+      example: "2026-09-20 14:00:00"
+      selector:
+        text:
+    end_time:
+      name: End Time
+      description: Ending timestamp in YYYY-MM-DD HH:MM:SS format.
+      required: true
+      example: "2026-09-20 14:15:00"
+      selector:
+        text:
+    media_player:
+      name: Media Player
+      description: Target media player entity to cast or play the recording.
+      required: false
+      example: "media_player.living_room_tv"
+      selector:
+        entity:
+          filter:
+            domain: media_player
+
+search_recordings:
+  name: Search Historical Recordings
+  description: Queries the NVR for recorded surveillance clips within a time range and returns clip metadata.
+  fields:
+    channel:
+      name: Channel
+      description: Camera channel number on the NVR (1-indexed).
+      required: false
+      default: 1
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 32
+          mode: box
+    start_time:
+      name: Start Time
+      description: Beginning timestamp in YYYY-MM-DD HH:MM:SS format.
+      required: true
+      example: "2026-09-20 00:00:00"
+      selector:
+        text:
+    end_time:
+      name: End Time
+      description: Ending timestamp in YYYY-MM-DD HH:MM:SS format.
+      required: true
+      example: "2026-09-20 23:59:59"
+      selector:
+        text:
+    count:
+      name: Count
+      description: Maximum number of recorded clips to return.
+      required: false
+      default: 50
+      example: 50
+      selector:
+        number:
+          min: 1
+          max: 200
+          mode: box
+

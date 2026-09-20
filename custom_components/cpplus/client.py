@@ -10,6 +10,7 @@ import os
 import re
 import ssl
 import urllib.parse
+from datetime import datetime
 from typing import Any, Callable
 import aiohttp
 
@@ -748,5 +749,140 @@ class CPPlusClient:
             await self._event_session.close()
         if not self._external_session and self._session and not self._session.closed:
             await self._session.close()
+
+    def get_playback_url(self, channel: int, start_time: str, end_time: str) -> str:
+        """Return the RTSP playback URL for the requested channel and time range.
+
+        Timestamps format: 'YYYY_MM_DD_HH_MM_SS' (e.g. 2026_09_20_14_00_00) or 'YYYY-MM-DD HH:MM:SS'.
+        """
+        username = urllib.parse.quote(self.username, safe="")
+        password = urllib.parse.quote(self.password, safe="")
+        start_fmt = start_time.replace("-", "_").replace(" ", "_").replace(":", "_")
+        end_fmt = end_time.replace("-", "_").replace(" ", "_").replace(":", "_")
+        return (
+            f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
+            f"/cam/playback?channel={channel}&starttime={start_fmt}&endtime={end_fmt}"
+        )
+
+    async def async_create_find_session(self) -> str | None:
+        """Create a file find session on the NVR."""
+        if self.device_type != TYPE_NVR:
+            return None
+        try:
+            res = await self.async_nvr_request("/cgi-bin/mediaFileFind.cgi?action=factory.create")
+            for line in res.splitlines():
+                if line.startswith("result="):
+                    return line.split("=", 1)[1].strip()
+        except Exception as err:
+            _LOGGER.error("Failed to create mediaFileFind session on %s: %s", self.host, err)
+        return None
+
+    async def async_close_find_session(self, session_id: str) -> bool:
+        """Destroy a file find session on the NVR."""
+        if self.device_type != TYPE_NVR:
+            return False
+        try:
+            res = await self.async_nvr_request(f"/cgi-bin/mediaFileFind.cgi?action=destroy&object={session_id}")
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.debug("Failed to close mediaFileFind session %s: %s", session_id, err)
+            return False
+
+    async def async_find_recordings(
+        self,
+        channel: int,
+        start_time: str,
+        end_time: str,
+        count: int = 50,
+        event_types: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search NVR for recorded clips within a time range (YYYY-MM-DD HH:MM:SS)."""
+        if self.device_type != TYPE_NVR:
+            return []
+
+        session_id = await self.async_create_find_session()
+        if not session_id:
+            return []
+
+        try:
+            start_encoded = urllib.parse.quote(start_time)
+            end_encoded = urllib.parse.quote(end_time)
+            find_uri = (
+                f"/cgi-bin/mediaFileFind.cgi?action=findFile&object={session_id}"
+                f"&condition.Channel={channel}&condition.StartTime={start_encoded}"
+                f"&condition.EndTime={end_encoded}&condition.Types[0]=dav"
+            )
+            if event_types:
+                for idx, et in enumerate(event_types):
+                    find_uri += f"&condition.Events[{idx}]={et}"
+
+            find_res = await self.async_nvr_request(find_uri)
+            if "ok" not in find_res.lower() and "true" not in find_res.lower():
+                _LOGGER.warning("NVR findFile returned unexpected response: %s", find_res)
+                return []
+
+            next_uri = f"/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={session_id}&count={count}"
+            next_res = await self.async_nvr_request(next_uri)
+
+            items: dict[int, dict[str, Any]] = {}
+            for line in next_res.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = re.match(r"items\[(\d+)\]\.([a-zA-Z0-9_\[\]]+)=(.*)", line)
+                if m:
+                    idx = int(m.group(1))
+                    key = m.group(2)
+                    val = m.group(3)
+                    if idx not in items:
+                        items[idx] = {}
+                    if key == "FilePath":
+                        items[idx]["path"] = val
+                    elif key == "StartTime":
+                        items[idx]["start_time"] = val
+                    elif key == "EndTime":
+                        items[idx]["end_time"] = val
+                    elif key == "Length":
+                        try:
+                            items[idx]["length"] = int(val)
+                            items[idx]["size_mb"] = round(int(val) / (1024 * 1024), 1)
+                        except ValueError:
+                            items[idx]["length"] = 0
+                            items[idx]["size_mb"] = 0.0
+                    elif key == "Type":
+                        items[idx]["type"] = val
+                    elif key.startswith("Flags"):
+                        items[idx].setdefault("flags", []).append(val)
+
+            results: list[dict[str, Any]] = []
+            for idx in sorted(items.keys()):
+                item = items[idx]
+                if "path" in item:
+                    flags = item.get("flags", [])
+                    event_type = "Continuous"
+                    if any("Event" in f for f in flags):
+                        event_type = "AI Event"
+                    elif any("Motion" in f for f in flags):
+                        event_type = "Motion"
+                    elif any("Manual" in f for f in flags):
+                        event_type = "Manual"
+                    item["event_type"] = event_type
+
+                    duration = 0
+                    if "start_time" in item and "end_time" in item:
+                        try:
+                            t_start = datetime.strptime(item["start_time"], "%Y-%m-%d %H:%M:%S")
+                            t_end = datetime.strptime(item["end_time"], "%Y-%m-%d %H:%M:%S")
+                            duration = int((t_end - t_start).total_seconds())
+                        except Exception:
+                            duration = 0
+                    item["duration"] = duration
+                    item["channel"] = channel
+                    results.append(item)
+
+            return results
+        finally:
+            await self.async_close_find_session(session_id)
+
 
 

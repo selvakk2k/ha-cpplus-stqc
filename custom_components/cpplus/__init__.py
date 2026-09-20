@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv, device_registry as dr
 import voluptuous as vol
+
+from .views import CPPlusPlaybackMediaView
 
 from .client import CPPlusClient
 from .coordinator import CPPlusDataUpdateCoordinator
@@ -158,6 +160,77 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     vol.Required("preset"): vol.All(vol.Coerce(int), vol.Range(min=1, max=255)),
                 }
             ),
+        )
+
+    # Register HTTP media streaming view for playback
+    if "playback_view" not in hass.data[DOMAIN]:
+        hass.http.register_view(CPPlusPlaybackMediaView(hass))
+        hass.data[DOMAIN]["playback_view"] = True
+
+    async def handle_play_recording(call: ServiceCall) -> None:
+        """Handle historical recording playback service call."""
+        channel = call.data.get("channel", 1)
+        start_time = call.data["start_time"]
+        end_time = call.data["end_time"]
+        media_player = call.data.get("media_player")
+
+        url = client.get_playback_url(channel, start_time, end_time)
+        _LOGGER.info("Playing recording for channel %d (%s - %s) on %s", channel, start_time, end_time, media_player)
+
+        if media_player:
+            await hass.services.async_call(
+                "media_player",
+                "play_media",
+                {
+                    "entity_id": media_player,
+                    "media_content_id": url,
+                    "media_content_type": "video",
+                },
+                blocking=True,
+            )
+
+    if not hass.services.has_service(DOMAIN, "play_recording"):
+        hass.services.async_register(
+            DOMAIN,
+            "play_recording",
+            handle_play_recording,
+            schema=vol.Schema(
+                {
+                    vol.Optional("channel", default=1): cv.positive_int,
+                    vol.Required("start_time"): cv.string,
+                    vol.Required("end_time"): cv.string,
+                    vol.Optional("media_player"): cv.entity_id,
+                },
+                extra=vol.ALLOW_EXTRA,
+            ),
+        )
+
+    async def handle_search_recordings(call: ServiceCall) -> ServiceResponse:
+        """Search NVR for recorded clips within a time range."""
+        channel = call.data.get("channel", 1)
+        start_time = call.data["start_time"]
+        end_time = call.data["end_time"]
+        count = call.data.get("count", 50)
+        clips = await client.async_find_recordings(
+            channel=channel, start_time=start_time, end_time=end_time, count=count
+        )
+        return {"channel": channel, "count": len(clips), "clips": clips}
+
+    if not hass.services.has_service(DOMAIN, "search_recordings"):
+        hass.services.async_register(
+            DOMAIN,
+            "search_recordings",
+            handle_search_recordings,
+            schema=vol.Schema(
+                {
+                    vol.Optional("channel", default=1): cv.positive_int,
+                    vol.Required("start_time"): cv.string,
+                    vol.Required("end_time"): cv.string,
+                    vol.Optional("count", default=50): cv.positive_int,
+                },
+                extra=vol.ALLOW_EXTRA,
+            ),
+            supports_response=SupportsResponse.OPTIONAL,
         )
 
     return True
