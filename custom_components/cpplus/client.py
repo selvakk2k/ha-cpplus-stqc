@@ -97,6 +97,8 @@ class CPPlusClient:
         self._lock = asyncio.Lock()
         self._device_info: dict[str, Any] = {}
         self._digest_auth: AsyncDigestAuth | None = None
+        self._event_auth: AsyncDigestAuth | None = None
+        self._event_session: aiohttp.ClientSession | None = None
         self._channels: list[dict[str, Any]] = []
         self._stopped = False
 
@@ -455,21 +457,29 @@ class CPPlusClient:
         if self.device_type != TYPE_NVR:
             return
 
-        session = await self._get_session()
+        if self._event_auth is None:
+            self._event_auth = AsyncDigestAuth(self.username, self.password)
+
+        if self._event_session is None or self._event_session.closed:
+            self._event_session = aiohttp.ClientSession(
+                connector=aiohttp.TCPConnector(ssl=self._get_ssl_context()),
+                timeout=aiohttp.ClientTimeout(total=None, sock_read=90),
+            )
+        session = self._event_session
         uri = "/cgi-bin/eventManager.cgi?action=attach&codes=[All]"
         url = f"https://{self.host}:{self.port}{uri}"
 
         while not self._stopped:
             try:
                 headers = {"User-Agent": "Mozilla/5.0"}
-                if self._digest_auth and self._digest_auth.realm:
-                    headers["Authorization"] = self._digest_auth.build_header("GET", uri)
+                if self._event_auth.realm and self._event_auth.nonce:
+                    headers["Authorization"] = self._event_auth.build_header("GET", uri)
 
-                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=None, sock_read=90)) as resp:
+                async with session.get(url, headers=headers) as resp:
                     if resp.status == 401:
                         auth_hdr = resp.headers.get("WWW-Authenticate", "")
                         if "Digest" in auth_hdr:
-                            self._digest_auth.parse_challenge(auth_hdr)
+                            self._event_auth.parse_challenge(auth_hdr)
                             continue
 
                     if resp.status != 200:
@@ -734,6 +744,8 @@ class CPPlusClient:
     async def async_close(self) -> None:
         """Close background connections and session."""
         self._stopped = True
+        if self._event_session and not self._event_session.closed:
+            await self._event_session.close()
         if not self._external_session and self._session and not self._session.closed:
             await self._session.close()
 

@@ -133,7 +133,10 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
             success = False
 
         if success:
-            await self.coordinator.async_request_refresh()
+            ch = next((c for c in self.coordinator.channels if c.get("index") == self._channel_idx), None)
+            if ch:
+                ch[self._feature_key] = True
+            self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn the feature off."""
@@ -147,4 +150,7 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
             success = False
 
         if success:
-            await self.coordinator.async_request_refresh()
+            ch = next((c for c in self.coordinator.channels if c.get("index") == self._channel_idx), None)
+            if ch:
+                ch[self._feature_key] = False
+            self.async_write_ha_state()

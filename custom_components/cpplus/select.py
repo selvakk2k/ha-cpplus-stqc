@@ -109,7 +109,10 @@ class CPPlusDayNightSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Selec
         mode_int = DAY_NIGHT_NAME_TO_INT.get(option, 1)
         success = await self.coordinator.client.async_set_video_in_mode(self._channel_idx, mode_int)
         if success:
-            await self.coordinator.async_request_refresh()
+            ch = next((c for c in self.coordinator.channels if c.get("index") == self._channel_idx), None)
+            if ch:
+                ch["video_in_mode"] = mode_int
+            self.async_write_ha_state()
 
 
 class CPPlusIlluminatorSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], SelectEntity):
@@ -161,4 +164,7 @@ class CPPlusIlluminatorSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Se
         """Change Illuminator option."""
         success = await self.coordinator.client.async_set_lighting_mode(self._channel_idx, option)
         if success:
-            await self.coordinator.async_request_refresh()
+            ch = next((c for c in self.coordinator.channels if c.get("index") == self._channel_idx), None)
+            if ch:
+                ch["lighting_mode"] = option
+            self.async_write_ha_state()

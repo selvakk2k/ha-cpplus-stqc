@@ -5,7 +5,7 @@ import logging
 from typing import Any
 
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .client import CPPlusClient
@@ -85,8 +85,9 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.device_info_data = await self.client.async_get_device_info()
 
             if self.client.device_type == TYPE_NVR:
-                self.channels = await self.client.async_get_channels()
-                # Test connection
+                if not self.channels:
+                    self.channels = await self.client.async_get_channels()
+                # Lightweight connection ping
                 await self.client.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
             else:
                 # Periodic ping / keepalive query to test connection on standalone camera
@@ -102,16 +103,8 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "channel_events": self.channel_events,
             }
         except Exception as err:
-            _LOGGER.debug("Coordinator update error on %s: %s", self.client.host, err)
-            return {
-                "online": False,
-                "serial": self.device_info_data.get("serial", self.client.host) if self.device_info_data else self.client.host,
-                "hardware": self.device_info_data.get("hardware", "CP PLUS STQC") if self.device_info_data else "CP PLUS STQC",
-                "firmware": self.device_info_data.get("firmware", "Unknown") if self.device_info_data else "Unknown",
-                "device_type": self.client.device_type,
-                "channels": self.channels,
-                "channel_events": self.channel_events,
-            }
+            _LOGGER.warning("Coordinator update error on %s: %s", self.client.host, err)
+            raise UpdateFailed(f"Error communicating with CP PLUS device at {self.client.host}: {err}") from err
 
     @property
     def device_info(self) -> DeviceInfo:
