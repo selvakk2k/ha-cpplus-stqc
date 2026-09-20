@@ -41,8 +41,10 @@ class CPPlusMediaSource(MediaSource):
         self,
         item: MediaSourceItem,
     ) -> BrowseMediaSource:
-        """Return media browser hierarchy."""
-        entries = self.hass.data.get(DOMAIN, {})
+        entries = {
+            k: v for k, v in self.hass.data.get(DOMAIN, {}).items()
+            if hasattr(v, "device_name")
+        }
         if not entries:
             raise Unresolvable("No CP PLUS STQC integration entries active")
 

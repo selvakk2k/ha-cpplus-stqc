@@ -403,6 +403,20 @@ class CPPlusClient:
         except Exception as err:
             _LOGGER.debug("Could not query Lighting: %s", err)
 
+        audio_map: dict[int, bool] = {}
+        try:
+            enc_res = await self.async_nvr_request("/cgi-bin/configManager.cgi?action=getConfig&name=Encode")
+            for line in enc_res.splitlines():
+                m_aud = re.match(
+                    r"table\.Encode\[(\d+)\]\.MainFormat\[0\]\.(?:Audio\.Enable|AudioEnable)=(true|false)",
+                    line.strip(),
+                    re.I,
+                )
+                if m_aud:
+                    audio_map[int(m_aud.group(1))] = m_aud.group(2).lower() == "true"
+        except Exception as err:
+            _LOGGER.debug("Could not query Encode audio: %s", err)
+
         channels: list[dict[str, Any]] = []
         for idx, name in sorted(title_map.items()):
             if not name or (name.startswith("Channel") and idx >= 17):
@@ -448,6 +462,7 @@ class CPPlusClient:
                 "tripwire": tripwire_map.get(idx, False),
                 "video_in_mode": video_mode_map.get(idx, 0),
                 "lighting_mode": lighting_map.get(idx, "Auto"),
+                "audio_enable": audio_map.get(idx, True),
             })
 
         self._channels = channels
@@ -704,6 +719,23 @@ class CPPlusClient:
             return "ok" in res.lower()
         except Exception as err:
             _LOGGER.error("Failed to set CrossLineDetection on channel %d: %s", channel_idx, err)
+            return False
+
+    async def async_set_audio_enable(self, channel_idx: int, enable: bool) -> bool:
+        """Enable or disable audio transmission on channel RTSP stream."""
+        if self.device_type != TYPE_NVR:
+            return False
+        val = "true" if enable else "false"
+        uri = (
+            f"/cgi-bin/configManager.cgi?action=setConfig"
+            f"&Encode[{channel_idx}].MainFormat[0].Audio.Enable={val}"
+            f"&Encode[{channel_idx}].MainFormat[0].AudioEnable={val}"
+        )
+        try:
+            res = await self.async_nvr_request(uri)
+            return "ok" in res.lower()
+        except Exception as err:
+            _LOGGER.error("Failed to set audio enable on channel %d: %s", channel_idx, err)
             return False
 
     async def async_ptz_control(

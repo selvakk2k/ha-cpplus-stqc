@@ -70,6 +70,19 @@ async def async_setup_entry(
                 )
             )
 
+            # Audio stream transmission switch
+            entities.append(
+                CPPlusDetectionSwitch(
+                    coordinator=coordinator,
+                    channel_idx=ch_idx,
+                    channel_num=ch_num,
+                    channel_name=ch_name,
+                    feature_key="audio_enable",
+                    name="Audio Stream",
+                    icon="mdi:microphone",
+                )
+            )
+
     async_add_entities(entities)
 
 
@@ -117,6 +130,13 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
         return bool(ch.get(self._feature_key, False))
 
     @property
+    def icon(self) -> str | None:
+        """Return icon based on state."""
+        if self._feature_key == "audio_enable":
+            return "mdi:microphone" if self.is_on else "mdi:microphone-off"
+        return self._attr_icon
+
+    @property
     def available(self) -> bool:
         """Return true if NVR is online."""
         return super().available and bool(self.coordinator.data and self.coordinator.data.get("online", False))
@@ -129,6 +149,8 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
             success = await self.coordinator.client.async_set_smd_vehicle(self._channel_idx, True)
         elif self._feature_key == "tripwire":
             success = await self.coordinator.client.async_set_tripwire(self._channel_idx, True)
+        elif self._feature_key == "audio_enable":
+            success = await self.coordinator.client.async_set_audio_enable(self._channel_idx, True)
         else:
             success = False
 
@@ -146,6 +168,8 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
             success = await self.coordinator.client.async_set_smd_vehicle(self._channel_idx, False)
         elif self._feature_key == "tripwire":
             success = await self.coordinator.client.async_set_tripwire(self._channel_idx, False)
+        elif self._feature_key == "audio_enable":
+            success = await self.coordinator.client.async_set_audio_enable(self._channel_idx, False)
         else:
             success = False
 

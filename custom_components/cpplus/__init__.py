@@ -163,9 +163,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     # Register HTTP media streaming view for playback
-    if "playback_view" not in hass.data[DOMAIN]:
+    hass.data.setdefault("cpplus_registered_views", set())
+    if "playback_view" not in hass.data["cpplus_registered_views"]:
         hass.http.register_view(CPPlusPlaybackMediaView(hass))
-        hass.data[DOMAIN]["playback_view"] = True
+        hass.data["cpplus_registered_views"].add("playback_view")
 
     async def handle_play_recording(call: ServiceCall) -> None:
         """Handle historical recording playback service call."""
