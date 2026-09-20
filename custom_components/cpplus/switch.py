@@ -27,6 +27,10 @@ async def async_setup_entry(
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
         for ch in coordinator.channels:
+            # Only create control switches for native CP PLUS cameras (CP-*)
+            if not ch.get("is_native_cpplus", False):
+                continue
+
             ch_idx = ch["index"]
             ch_num = ch["channel"]
             ch_name = ch["name"]

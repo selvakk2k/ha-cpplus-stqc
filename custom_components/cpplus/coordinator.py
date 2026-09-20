@@ -128,7 +128,8 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         channel_unique_id = f"{nvr_serial}_ch{channel_num}"
 
         ch = next((c for c in self.channels if c.get("channel") == channel_num), {})
-        model = ch.get("model") or "CP PLUS Camera"
+        model = ch.get("model") or "Camera"
+        manufacturer = ch.get("manufacturer") or ("CP PLUS" if model.startswith("CP-") else ("Dahua" if model.startswith("VTO") else ("Xiongmai" if model.startswith("IPC_GK") else "Generic ONVIF")))
         serial = ch.get("serial")
         firmware = ch.get("firmware")
         addr = ch.get("address")
@@ -150,7 +151,7 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         info = DeviceInfo(
             identifiers={(DOMAIN, channel_unique_id)},
             name=f"{channel_name}",
-            manufacturer=MANUFACTURER,
+            manufacturer=manufacturer,
             model=model,
             configuration_url=config_url,
         )

@@ -40,7 +40,7 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
 
         # If start and end timestamps are present, stream live fMP4 from the NVR RTSP playback server
         if start_time and end_time:
-            return await self._stream_rtsp_fmp4(request, client, int(channel), start_time, end_time)
+            return await self._stream_rtsp_fmp4(request, client, int(channel), start_time, end_time, entry_id)
 
         # Fallback to direct raw file proxy with DigestAuth
         if file_path:
@@ -55,10 +55,17 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
         channel: int,
         start_time: str,
         end_time: str,
+        entry_id: str,
     ) -> web.StreamResponse:
         """Stream playback RTSP converted to fragmented MP4 (fMP4) via ffmpeg."""
         rtsp_url = client.get_playback_url(channel, start_time, end_time)
         _LOGGER.debug("Starting fMP4 playback stream from: %s", rtsp_url)
+
+        coordinator = self.hass.data.get(DOMAIN, {}).get(entry_id)
+        is_native = True
+        if coordinator and hasattr(coordinator, "channels"):
+            ch_info = next((c for c in coordinator.channels if c.get("channel") == channel), {})
+            is_native = ch_info.get("is_native_cpplus", True)
 
         cmd = [
             "ffmpeg",
@@ -66,14 +73,24 @@ class CPPlusPlaybackMediaView(HomeAssistantView):
             "-loglevel", "warning",
             "-rtsp_transport", "tcp",
             "-i", rtsp_url,
-            "-c:v", "copy",
+            "-map", "0:v:0",
+            "-map", "0:a?",
+        ]
+
+        if is_native:
+            cmd.extend(["-c:v", "copy"])
+        else:
+            # Third-party / ONVIF cameras default to H.265 (HEVC), transcode to ultrafast H.264
+            cmd.extend(["-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency"])
+
+        cmd.extend([
             "-c:a", "aac",
             "-b:a", "128k",
             "-f", "mp4",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
             "-reset_timestamps", "1",
             "-",
-        ]
+        ])
 
         try:
             proc = await asyncio.create_subprocess_exec(

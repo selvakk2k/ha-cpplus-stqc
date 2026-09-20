@@ -432,7 +432,7 @@ class CPPlusClient:
             https_port = rd_info.get("HttpsPort")
             vendor = rd_info.get("Vendor")
 
-            # Determine human-friendly and accurate model string
+            # Determine human-friendly and accurate model string & manufacturer
             if raw_model and raw_model != "Default":
                 model = raw_model
             elif addr and addr.startswith("192.168.1."):
@@ -442,15 +442,34 @@ class CPPlusClient:
                 elif 212 <= last_octet <= 224:
                     model = "CP-UNC-TA21L3C-Q"
                 else:
-                    model = "CP PLUS Camera"
+                    model = "Camera"
             else:
-                model = "CP PLUS Camera"
+                model = "Camera"
+
+            # Brand and Native CP PLUS classification
+            if model.startswith("CP-"):
+                manufacturer = "CP PLUS"
+                is_native_cpplus = True
+            elif model.startswith("VTO"):
+                manufacturer = "Dahua"
+                is_native_cpplus = False
+            elif model.startswith("IPC_GK"):
+                manufacturer = "Xiongmai"
+                is_native_cpplus = False
+            elif vendor:
+                manufacturer = vendor
+                is_native_cpplus = False
+            else:
+                manufacturer = "Generic ONVIF"
+                is_native_cpplus = False
 
             channels.append({
                 "index": idx,
                 "channel": idx + 1,
                 "name": name,
                 "model": model,
+                "manufacturer": manufacturer,
+                "is_native_cpplus": is_native_cpplus,
                 "serial": serial_no,
                 "firmware": firmware_ver,
                 "address": addr,
@@ -900,13 +919,25 @@ class CPPlusClient:
                 item = items[idx]
                 if "path" in item:
                     flags = item.get("flags", [])
-                    event_type = "Continuous"
-                    if any("Event" in f for f in flags):
-                        event_type = "AI Event"
-                    elif any("Motion" in f for f in flags):
+                    path_str = item.get("path", "")
+                    # Extract Dahua/CP PLUS filename tag [M]=Motion, [R]=Regular, [A]=Alarm, [H]=Human, [V]=Vehicle
+                    m_tag = re.search(r"\[([a-zA-Z0-9]+)\]\[\d+@\d+\]", path_str)
+                    tag = m_tag.group(1).upper() if m_tag else ""
+
+                    if "HUMAN" in tag or any("Human" in f for f in flags):
+                        event_type = "Human"
+                    elif "VEHICLE" in tag or any("Vehicle" in f for f in flags):
+                        event_type = "Vehicle"
+                    elif tag == "M" or "[M]" in path_str or any("Motion" in f for f in flags):
                         event_type = "Motion"
-                    elif any("Manual" in f for f in flags):
-                        event_type = "Manual"
+                    elif tag == "A" or any("Alarm" in f for f in flags):
+                        event_type = "Alarm"
+                    elif tag == "R" or any("Regular" in f for f in flags):
+                        event_type = "Continuous"
+                    elif any("Event" in f for f in flags):
+                        event_type = "AI Event"
+                    else:
+                        event_type = "Continuous"
                     item["event_type"] = event_type
 
                     duration = 0
