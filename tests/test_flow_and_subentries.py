@@ -136,7 +136,6 @@ async def test_supported_subentry_types() -> None:
     standalone_entry = MockConfigEntry(domain=DOMAIN, data={CONF_DEVICE_TYPE: TYPE_CAMERA})
 
     assert CPPlusConfigFlow.async_get_supported_subentry_types(nvr_entry) == {
-        SUBENTRY_TYPE_HUB: NVRHubSubentryFlowHandler,
         SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler,
     }
     assert CPPlusConfigFlow.async_get_supported_subentry_types(standalone_entry) == {}
@@ -233,6 +232,15 @@ async def test_nvr_hub_subentry_reconfigure(hass: HomeAssistant) -> None:
     assert result["reason"] == "reconfigure_successful"
     assert hub_subentry.title == "Security Office NVR"
     assert hub_subentry.data["name"] == "Security Office NVR"
+
+    # User step on NVR hub handler aborts because hub is already configured
+    user_flow = NVRHubSubentryFlowHandler()
+    user_flow.hass = hass
+    user_flow.handler = (entry.entry_id, SUBENTRY_TYPE_HUB)
+    user_flow.context = {"source": "user"}
+    user_result = await user_flow.async_step_user()
+    assert user_result["type"] == FlowResultType.ABORT
+    assert user_result["reason"] == "already_configured"
 
 
 @pytest.mark.asyncio

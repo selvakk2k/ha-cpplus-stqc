@@ -74,6 +74,9 @@
             "name": "NVR Name"
           }
         }
+      },
+      "abort": {
+        "already_configured": "The NVR Hub is already configured for this device."
       }
     },
     "camera_channel": {

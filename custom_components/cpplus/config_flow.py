@@ -56,6 +56,12 @@ def build_device_schema() -> vol.Schema:
 class NVRHubSubentryFlowHandler(ConfigSubentryFlow):
     """Handle subentry flow for NVR hub settings and renaming."""
 
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Handle user step for NVR hub (hub is a singleton created during initial setup)."""
+        return self.async_abort(reason="already_configured")
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
@@ -191,10 +197,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
         """Return subentry flows supported by this integration."""
         if config_entry.data.get(CONF_DEVICE_TYPE) == TYPE_NVR:
-            return {
-                SUBENTRY_TYPE_HUB: NVRHubSubentryFlowHandler,
-                SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler,
-            }
+            return {SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler}
         return {}
 
     async def async_step_user(
