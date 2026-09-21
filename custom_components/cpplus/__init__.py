@@ -200,10 +200,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     model = coordinator.device_info_data.get("hardware") or (
         "CP-UNR-4K4322-V4" if client.device_type == TYPE_NVR else "CP-UNC-TA21L3C-Q"
     )
+
+    if client.device_type == TYPE_NVR:
+        if coordinator.device_name and coordinator.device_name != client.host:
+            dev_name = f"CP PLUS NVR {coordinator.device_name}"
+        else:
+            dev_name = f"CP PLUS NVR {model}" if model else "CP PLUS NVR"
+    else:
+        if coordinator.device_name and coordinator.device_name != client.host:
+            dev_name = f"CP PLUS Camera {coordinator.device_name}"
+        else:
+            dev_name = f"CP PLUS Camera {model}" if model else "CP PLUS Camera"
+
     parent_device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, serial)},
-        name=f"CP PLUS STQC {coordinator.device_name}",
+        name=dev_name,
         manufacturer=MANUFACTURER,
         model=model,
         sw_version=coordinator.device_info_data.get("firmware", "Unknown"),

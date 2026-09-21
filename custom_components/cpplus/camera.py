@@ -3,18 +3,11 @@
 from __future__ import annotations
 
 import logging
-from homeassistant.components.camera import (
-    Camera,
-    CameraEntityFeature,
-    WebRTCSendMessage,
-)
-from homeassistant.components.camera.webrtc import async_get_supported_provider
+from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from webrtc_models import RTCIceCandidateInit
 
 from .const import DOMAIN, TYPE_NVR
 from .coordinator import CPPlusDataUpdateCoordinator
@@ -113,25 +106,3 @@ class CPPlusCamera(CoordinatorEntity[CPPlusDataUpdateCoordinator], Camera):
     async def stream_source(self) -> str | None:
         """Return the RTSP stream URL."""
         return self.coordinator.client.get_stream_url(self._channel, self._subtype)
-
-    async def async_handle_async_webrtc_offer(
-        self, offer_sdp: str, session_id: str, send_message: WebRTCSendMessage
-    ) -> None:
-        """Handle WebRTC offer by delegating to active WebRTC provider (e.g. go2rtc)."""
-        provider = self._webrtc_provider or await async_get_supported_provider(self.hass, self)
-        if provider:
-            self._webrtc_provider = provider
-            await provider.async_handle_async_webrtc_offer(self, offer_sdp, session_id, send_message)
-            return
-        raise HomeAssistantError("WebRTC provider not available")
-
-    async def async_on_webrtc_candidate(
-        self, session_id: str, candidate: RTCIceCandidateInit
-    ) -> None:
-        """Handle WebRTC candidate."""
-        provider = self._webrtc_provider or await async_get_supported_provider(self.hass, self)
-        if provider:
-            self._webrtc_provider = provider
-            await provider.async_on_webrtc_candidate(session_id, candidate)
-            return
-        raise HomeAssistantError("WebRTC provider not available")

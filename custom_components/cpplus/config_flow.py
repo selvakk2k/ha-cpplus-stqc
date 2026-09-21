@@ -75,9 +75,15 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await client.async_close()
 
                 if device_type == TYPE_NVR:
-                    title = f"CP PLUS STQC NVR ({model})"
+                    if name and name != host:
+                        title = f"CP PLUS NVR {name}"
+                    else:
+                        title = f"CP PLUS NVR {model}" if model else "CP PLUS NVR"
                 else:
-                    title = f"CP PLUS STQC {name} ({model})"
+                    if name and name != host:
+                        title = f"CP PLUS Camera {name}"
+                    else:
+                        title = f"CP PLUS Camera {model}" if model else "CP PLUS Camera"
 
                 return self.async_create_entry(
                     title=title,

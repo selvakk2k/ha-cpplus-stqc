@@ -151,9 +151,20 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         model = self.device_info_data.get("hardware") or ("CP-UNR-4K4322-V4" if self.client.device_type == TYPE_NVR else "CP-UNC-TA21L3C-Q")
         firmware = self.device_info_data.get("firmware") or "Unknown"
 
+        if self.client.device_type == TYPE_NVR:
+            if self.device_name and self.device_name != self.client.host:
+                dev_name = f"CP PLUS NVR {self.device_name}"
+            else:
+                dev_name = f"CP PLUS NVR {model}" if model else "CP PLUS NVR"
+        else:
+            if self.device_name and self.device_name != self.client.host:
+                dev_name = f"CP PLUS Camera {self.device_name}"
+            else:
+                dev_name = f"CP PLUS Camera {model}" if model else "CP PLUS Camera"
+
         return DeviceInfo(
             identifiers={(DOMAIN, serial)},
-            name=f"CP PLUS STQC {self.device_name}",
+            name=dev_name,
             manufacturer=MANUFACTURER,
             model=model,
             sw_version=firmware,
