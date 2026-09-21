@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from homeassistant.config_entries import ConfigEntry
+from types import MappingProxyType
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
@@ -25,6 +26,7 @@ from .const import (
     CONF_DEVICE_TYPE,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
+    SUBENTRY_TYPE_CHANNEL,
     TYPE_CAMERA,
     TYPE_NVR,
     PTZ_COMMANDS,
@@ -191,7 +193,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_type=device_type,
     )
 
-    coordinator = CPPlusDataUpdateCoordinator(hass, client, name)
+    coordinator = CPPlusDataUpdateCoordinator(hass, client, name, entry=entry)
     await coordinator.async_config_entry_first_refresh()
 
     # Pre-register the parent device in the device registry to obtain its device ID
@@ -237,6 +239,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             f"cpplus_event_listener_{host}",
         )
 
+    # Register camera channel subentries for NVR entries
+    if client.device_type == TYPE_NVR and coordinator.channels:
+        existing_subentries = {
+            s.unique_id: s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
+        for ch in coordinator.channels:
+            ch_uid = f"{serial}_ch{ch['channel']}"
+            if ch_uid not in existing_subentries:
+                subentry = ConfigSubentry(
+                    data=MappingProxyType({
+                        "channel": ch["channel"],
+                        "channel_index": ch["index"],
+                        "name": ch["name"],
+                        "is_native_cpplus": ch.get("is_native_cpplus", False),
+                        "has_smd": ch.get("has_smd", False),
+                        "has_tripwire": ch.get("has_tripwire", False),
+                        "model": ch.get("model", "Camera"),
+                    }),
+                    subentry_type=SUBENTRY_TYPE_CHANNEL,
+                    title=ch["name"],
+                    unique_id=ch_uid,
+                )
+                hass.config_entries.async_add_subentry(entry, subentry)
+            else:
+                subentry = existing_subentries[ch_uid]
+                if subentry.title:
+                    ch["name"] = subentry.title
+
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Purge orphaned switch and select entities for non-native camera channels
@@ -262,6 +295,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         break
 
     return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate old entry to new version."""
+    _LOGGER.debug("Migrating CP PLUS config entry from version %s", entry.version)
+
+    if entry.version == 1:
+        # Migration from v1 to v2:
+        # Subentries are created dynamically during setup
+        hass.config_entries.async_update_entry(entry, version=2)
+        _LOGGER.info("Successfully migrated CP PLUS config entry to version 2")
+
+    return True
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry when options or subentries change."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

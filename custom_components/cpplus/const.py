@@ -60,3 +60,6 @@ PTZ_COMMANDS: dict[str, str] = {
     "focus_far": "FocusFar",
 }
 
+SUBENTRY_TYPE_CHANNEL = "camera_channel"
+
+

@@ -9,7 +9,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, TYPE_NVR
+from .const import DOMAIN, SUBENTRY_TYPE_CHANNEL, TYPE_NVR
 from .coordinator import CPPlusDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -22,37 +22,41 @@ async def async_setup_entry(
 ) -> None:
     """Set up CP PLUS cameras from a config entry."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[Camera] = []
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
+        subentries = {
+            s.data.get("channel"): s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
         for ch in coordinator.channels:
             ch_num = ch["channel"]
-            ch_name = ch["name"]
-            entities.append(
+            subentry = subentries.get(ch_num)
+            ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
+            subentry_id = subentry.subentry_id if subentry else None
+
+            entities: list[Camera] = [
                 CPPlusCamera(
                     coordinator,
                     channel=ch_num,
                     subtype=0,
                     stream_label="Main",
                     channel_name=ch_name,
-                )
-            )
-            entities.append(
+                ),
                 CPPlusCamera(
                     coordinator,
                     channel=ch_num,
                     subtype=1,
                     stream_label="Sub",
                     channel_name=ch_name,
-                )
-            )
+                ),
+            ]
+            async_add_entities(entities, config_subentry_id=subentry_id)
     else:
         entities = [
             CPPlusCamera(coordinator, channel=1, subtype=0, stream_label="Main"),
             CPPlusCamera(coordinator, channel=1, subtype=1, stream_label="Sub"),
         ]
-
-    async_add_entities(entities)
+        async_add_entities(entities)
 
 
 class CPPlusCamera(CoordinatorEntity[CPPlusDataUpdateCoordinator], Camera):

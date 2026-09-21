@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, TYPE_NVR
+from .const import DOMAIN, SUBENTRY_TYPE_CHANNEL, TYPE_NVR
 from .coordinator import CPPlusDataUpdateCoordinator
 
 
@@ -23,9 +23,11 @@ async def async_setup_entry(
     """Set up CP PLUS switch entities."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[SwitchEntity] = []
-
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
+        subentries = {
+            s.data.get("channel"): s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
         for ch in coordinator.channels:
             # Only create control switches for native CP PLUS cameras (CP-*)
             if not ch.get("is_native_cpplus", False):
@@ -33,7 +35,11 @@ async def async_setup_entry(
 
             ch_idx = ch["index"]
             ch_num = ch["channel"]
-            ch_name = ch["name"]
+            subentry = subentries.get(ch_num)
+            ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
+            subentry_id = subentry.subentry_id if subentry else None
+
+            entities: list[SwitchEntity] = []
 
             # Human Detection arming switch
             if ch.get("has_smd", False):
@@ -90,7 +96,8 @@ async def async_setup_entry(
                 )
             )
 
-    async_add_entities(entities)
+            if entities:
+                async_add_entities(entities, config_subentry_id=subentry_id)
 
 
 class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], SwitchEntity):

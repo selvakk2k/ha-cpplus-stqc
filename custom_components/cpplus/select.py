@@ -11,6 +11,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .const import (
     DOMAIN,
+    SUBENTRY_TYPE_CHANNEL,
     TYPE_NVR,
     DAY_NIGHT_MODES,
     DAY_NIGHT_NAME_TO_INT,
@@ -27,9 +28,11 @@ async def async_setup_entry(
     """Set up CP PLUS select entities."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[SelectEntity] = []
-
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
+        subentries = {
+            s.data.get("channel"): s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
         for ch in coordinator.channels:
             # Only create control selectors for native CP PLUS cameras (CP-*)
             if not ch.get("is_native_cpplus", False):
@@ -37,29 +40,27 @@ async def async_setup_entry(
 
             ch_idx = ch["index"]
             ch_num = ch["channel"]
-            ch_name = ch["name"]
+            subentry = subentries.get(ch_num)
+            ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
+            subentry_id = subentry.subentry_id if subentry else None
 
-            # Day/Night Video In Mode
-            entities.append(
+            entities: list[SelectEntity] = [
+                # Day/Night Video In Mode
                 CPPlusDayNightSelect(
                     coordinator=coordinator,
                     channel_idx=ch_idx,
                     channel_num=ch_num,
                     channel_name=ch_name,
-                )
-            )
-
-            # Illuminator / Lighting Mode
-            entities.append(
+                ),
+                # Illuminator / Lighting Mode
                 CPPlusIlluminatorSelect(
                     coordinator=coordinator,
                     channel_idx=ch_idx,
                     channel_num=ch_num,
                     channel_name=ch_name,
-                )
-            )
-
-    async_add_entities(entities)
+                ),
+            ]
+            async_add_entities(entities, config_subentry_id=subentry_id)
 
 
 class CPPlusDayNightSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], SelectEntity):

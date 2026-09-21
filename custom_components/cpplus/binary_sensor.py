@@ -14,6 +14,7 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .const import (
     DOMAIN,
+    SUBENTRY_TYPE_CHANNEL,
     TYPE_NVR,
     EVENT_HUMAN,
     EVENT_VEHICLE,
@@ -31,18 +32,23 @@ async def async_setup_entry(
     """Set up CP PLUS binary sensors."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[BinarySensorEntity] = [
-        CPPlusConnectivitySensor(coordinator),
-    ]
+    # Root connectivity sensor belongs to the main config entry
+    async_add_entities([CPPlusConnectivitySensor(coordinator)])
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
+        subentries = {
+            s.data.get("channel"): s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
         for ch in coordinator.channels:
             ch_idx = ch["index"]
             ch_num = ch["channel"]
-            ch_name = ch["name"]
+            subentry = subentries.get(ch_num)
+            ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
+            subentry_id = subentry.subentry_id if subentry else None
 
-            # Standard Motion sensor
-            entities.append(
+            channel_entities: list[BinarySensorEntity] = [
+                # Standard Motion sensor
                 CPPlusChannelEventSensor(
                     coordinator=coordinator,
                     channel_idx=ch_idx,
@@ -53,11 +59,11 @@ async def async_setup_entry(
                     device_class=BinarySensorDeviceClass.MOTION,
                     icon="mdi:motion-sensor",
                 )
-            )
+            ]
 
             # AI Human Detection sensor
             if ch.get("is_native_cpplus", False) and ch.get("has_smd", False):
-                entities.append(
+                channel_entities.append(
                     CPPlusChannelEventSensor(
                         coordinator=coordinator,
                         channel_idx=ch_idx,
@@ -72,7 +78,7 @@ async def async_setup_entry(
 
             # AI Vehicle Detection sensor
             if ch.get("is_native_cpplus", False) and ch.get("has_smd", False):
-                entities.append(
+                channel_entities.append(
                     CPPlusChannelEventSensor(
                         coordinator=coordinator,
                         channel_idx=ch_idx,
@@ -87,7 +93,7 @@ async def async_setup_entry(
 
             # Perimeter Tripwire sensor
             if ch.get("is_native_cpplus", False) and ch.get("has_tripwire", False):
-                entities.append(
+                channel_entities.append(
                     CPPlusChannelEventSensor(
                         coordinator=coordinator,
                         channel_idx=ch_idx,
@@ -100,7 +106,7 @@ async def async_setup_entry(
                     )
                 )
 
-    async_add_entities(entities)
+            async_add_entities(channel_entities, config_subentry_id=subentry_id)
 
 
 class CPPlusConnectivitySensor(CoordinatorEntity[CPPlusDataUpdateCoordinator], BinarySensorEntity):

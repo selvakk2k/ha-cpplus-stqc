@@ -5,6 +5,7 @@ import logging
 import time
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -27,13 +28,20 @@ _LOGGER = logging.getLogger(__name__)
 class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator to manage CP PLUS camera and NVR state updates."""
 
-    def __init__(self, hass: HomeAssistant, client: CPPlusClient, name: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        client: CPPlusClient,
+        name: str,
+        entry: ConfigEntry | None = None,
+    ) -> None:
         """Initialize coordinator."""
         super().__init__(
             hass,
             _LOGGER,
             name=f"CP PLUS STQC {name}",
             update_interval=timedelta(seconds=30),
+            config_entry=entry,
         )
         self.client = client
         self.device_name = name

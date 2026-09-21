@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, TYPE_NVR
+from .const import DOMAIN, SUBENTRY_TYPE_CHANNEL, TYPE_NVR
 from .coordinator import CPPlusDataUpdateCoordinator
 
 
@@ -21,21 +21,29 @@ async def async_setup_entry(
     """Set up CP PLUS sensor entities."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    entities: list[SensorEntity] = [
+    # Root diagnostic sensors for NVR / Standalone device
+    root_entities: list[SensorEntity] = [
         CPPlusDiagnosticSensor(coordinator, "serial", "Serial Number", "mdi:barcode"),
         CPPlusDiagnosticSensor(coordinator, "firmware", "Firmware Version", "mdi:cellphone-arrow-down"),
         CPPlusDiagnosticSensor(coordinator, "hardware", "Hardware Model", "mdi:chip"),
     ]
+    async_add_entities(root_entities)
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
+        subentries = {
+            s.data.get("channel"): s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
         for ch in coordinator.channels:
             # Provide read-only diagnostic status sensors for third-party cameras (where switches/selects are disabled)
             if not ch.get("is_native_cpplus", False):
                 ch_idx = ch["index"]
                 ch_num = ch["channel"]
-                ch_name = ch["name"]
+                subentry = subentries.get(ch_num)
+                ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
+                subentry_id = subentry.subentry_id if subentry else None
 
-                entities.extend([
+                channel_entities = [
                     CPPlusChannelStatusSensor(
                         coordinator, ch_idx, ch_num, ch_name, "audio_enable", "Audio Stream Status", "mdi:microphone"
                     ),
@@ -54,9 +62,8 @@ async def async_setup_entry(
                     CPPlusChannelStatusSensor(
                         coordinator, ch_idx, ch_num, ch_name, "tripwire", "Tripwire Arming Status", "mdi:ray-start-end"
                     ),
-                ])
-
-    async_add_entities(entities)
+                ]
+                async_add_entities(channel_entities, config_subentry_id=subentry_id)
 
 
 class CPPlusDiagnosticSensor(CoordinatorEntity[CPPlusDataUpdateCoordinator], SensorEntity):

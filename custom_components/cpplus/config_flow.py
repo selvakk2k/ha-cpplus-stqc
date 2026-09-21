@@ -8,7 +8,13 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
+from homeassistant.core import callback
+from homeassistant.data_entry_flow import AbortFlow, FlowResult
 
 from .client import CPPlusAuthError, CPPlusClient, CPPlusConnectionError, CPPlusError
 from .const import (
@@ -22,6 +28,7 @@ from .const import (
     CONF_DEVICE_TYPE,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
+    SUBENTRY_TYPE_CHANNEL,
     TYPE_NVR,
     TYPE_CAMERA,
 )
@@ -29,19 +36,135 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def build_device_schema() -> vol.Schema:
+    """Build configuration schema for device connections."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST): str,
+            vol.Required(CONF_USERNAME, default="admin"): str,
+            vol.Optional(CONF_PASSWORD, default=""): str,
+            vol.Optional(CONF_NAME, default=""): str,
+            vol.Optional(CONF_PORT, default=DEFAULT_PORT_HTTPS): int,
+            vol.Optional(CONF_RTSP_PORT, default=DEFAULT_PORT_RTSP): int,
+        }
+    )
+
+
+class CameraChannelSubentryFlowHandler(ConfigSubentryFlow):
+    """Handle subentry flow for adding and modifying camera channels under an NVR."""
+
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Add a new camera channel subentry."""
+        config_entry = self._get_entry()
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            ch_num = user_input["channel"]
+            ch_name = user_input["name"].strip()
+            existing_channels = {
+                s.data.get("channel")
+                for s in config_entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+            }
+            if ch_num in existing_channels:
+                errors["channel"] = "channel_exists"
+            else:
+                return self.async_create_entry(
+                    title=ch_name,
+                    data={
+                        "channel": ch_num,
+                        "channel_index": ch_num - 1,
+                        "name": ch_name,
+                        "is_native_cpplus": True,
+                        "has_smd": True,
+                        "has_tripwire": False,
+                    },
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required("channel"): vol.All(vol.Coerce(int), vol.Range(min=1, max=64)),
+                vol.Required("name"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="user",
+            data_schema=schema,
+            errors=errors,
+        )
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Reconfigure an existing camera channel subentry."""
+        config_entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+
+        if user_input is not None:
+            new_name = user_input["name"].strip()
+            return self.async_update_and_abort(
+                config_entry,
+                subentry,
+                title=new_name,
+                data_updates={"name": new_name},
+            )
+
+        schema = vol.Schema(
+            {
+                vol.Required("name", default=subentry.data.get("name", subentry.title)): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=schema,
+        )
+
+
 class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for CP PLUS cameras and NVRs."""
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self) -> None:
         """Initialize the config flow."""
         self._reauth_entry: config_entries.ConfigEntry | None = None
 
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: config_entries.ConfigEntry
+    ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
+        """Return subentry flows supported by this integration."""
+        if config_entry.data.get(CONF_DEVICE_TYPE) == TYPE_NVR:
+            return {SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler}
+        return {}
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial setup step."""
+        """Step 1: Choose connection mode (NVR vs Standalone Camera)."""
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=["nvr", "standalone"],
+        )
+
+    async def async_step_nvr(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle NVR setup."""
+        return await self._async_handle_device_step(step_id="nvr", expected_type=TYPE_NVR, user_input=user_input)
+
+    async def async_step_standalone(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle standalone IP camera setup."""
+        return await self._async_handle_device_step(step_id="standalone", expected_type=TYPE_CAMERA, user_input=user_input)
+
+    async def _async_handle_device_step(
+        self, step_id: str, expected_type: str, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Shared logic to authenticate, query hardware metadata, and create entry."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -59,6 +182,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 rtsp_port=rtsp_port,
                 username=username,
                 password=password,
+                device_type=expected_type,
             )
 
             try:
@@ -67,14 +191,14 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not serial:
                     raise CPPlusError(f"No serial number returned from device at {host}")
                 model = device_info.get("hardware", "STQC")
-                device_type = device_info.get("device_type", TYPE_CAMERA)
+                detected_type = device_info.get("device_type", expected_type)
 
                 await self.async_set_unique_id(serial)
                 self._abort_if_unique_id_configured()
 
                 await client.async_close()
 
-                if device_type == TYPE_NVR:
+                if detected_type == TYPE_NVR:
                     if name and name != host:
                         title = f"CP PLUS NVR {name}"
                     else:
@@ -94,7 +218,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_USERNAME: username,
                         CONF_PASSWORD: password,
                         CONF_NAME: name,
-                        CONF_DEVICE_TYPE: device_type,
+                        CONF_DEVICE_TYPE: detected_type,
                     },
                 )
             except CPPlusAuthError as err:
@@ -103,7 +227,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (CPPlusConnectionError, ConnectionError) as err:
                 _LOGGER.warning("Connection error configuring CP PLUS %s: %s", host, err)
                 errors["base"] = "invalid_auth" if "Authentication failed" in str(err) else "cannot_connect"
-            except config_entries.AbortFlow:
+            except AbortFlow:
                 raise
             except Exception as err:
                 _LOGGER.exception("Unexpected exception in CP PLUS config flow: %s", err)
@@ -111,20 +235,9 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             finally:
                 await client.async_close()
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_HOST): str,
-                vol.Required(CONF_USERNAME, default="admin"): str,
-                vol.Optional(CONF_PASSWORD, default=""): str,
-                vol.Optional(CONF_NAME, default=""): str,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT_HTTPS): int,
-                vol.Optional(CONF_RTSP_PORT, default=DEFAULT_PORT_RTSP): int,
-            }
-        )
-
         return self.async_show_form(
-            step_id="user",
-            data_schema=schema,
+            step_id=step_id,
+            data_schema=build_device_schema(),
             errors=errors,
         )
 
@@ -153,6 +266,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 rtsp_port=self._reauth_entry.data.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP),
                 username=self._reauth_entry.data[CONF_USERNAME],
                 password=password,
+                device_type=self._reauth_entry.data.get(CONF_DEVICE_TYPE, TYPE_CAMERA),
             )
 
             try:
@@ -184,7 +298,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (CPPlusConnectionError, ConnectionError) as err:
                 _LOGGER.warning("Connection error during reauth: %s", err)
                 errors["base"] = "cannot_connect"
-            except config_entries.AbortFlow:
+            except AbortFlow:
                 raise
             except Exception as err:
                 _LOGGER.exception("Unexpected exception in reauth: %s", err)

@@ -2,13 +2,37 @@
   "config": {
     "step": {
       "user": {
-        "title": "Add CP PLUS STQC Camera",
-        "description": "Enter the connection details for your CP PLUS camera.",
+        "title": "Select Connection Mode",
+        "description": "Choose how you want to connect your CP PLUS surveillance equipment to Home Assistant.",
+        "menu_options": {
+          "nvr": "Network Video Recorder (NVR)",
+          "standalone": "Standalone IP Camera"
+        },
+        "menu_option_descriptions": {
+          "nvr": "Connect through a central NVR to discover and manage all camera channels automatically. Recommended for multi-camera installations; works reliably even when cameras are on isolated PoE subnets or separate surveillance VLANs.",
+          "standalone": "Connect directly to a single IP camera on your network. Enables direct on-camera features and two-way talk, but requires the camera to be directly reachable by Home Assistant on your local network."
+        }
+      },
+      "nvr": {
+        "title": "Configure CP PLUS NVR",
+        "description": "Enter connection credentials for your central NVR hardware.",
         "data": {
-          "host": "IP Address",
+          "host": "NVR IP Address / Hostname",
           "username": "Username",
           "password": "Password",
-          "name": "Camera Name (e.g. Floor 2, Parking)",
+          "name": "Friendly Name (Optional)",
+          "port": "HTTPS Port (Default: 443)",
+          "rtsp_port": "RTSP Port (Default: 554)"
+        }
+      },
+      "standalone": {
+        "title": "Configure Standalone Camera",
+        "description": "Enter connection credentials for your standalone CP PLUS IP camera.",
+        "data": {
+          "host": "Camera IP Address",
+          "username": "Username",
+          "password": "Password",
+          "name": "Camera Name (Optional)",
           "port": "HTTPS Port (Default: 443)",
           "rtsp_port": "RTSP Port (Default: 554)"
         }
@@ -22,14 +46,45 @@
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the CP PLUS camera. Check IP and port.",
+      "cannot_connect": "Failed to connect to the device. Check IP and port.",
       "invalid_auth": "Invalid username or password.",
       "unknown": "An unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This CP PLUS camera is already configured.",
+      "already_configured": "This CP PLUS device is already configured.",
       "reauth_successful": "Re-authentication was successful.",
       "wrong_device": "The device responded with a different serial number than the configured device."
+    }
+  },
+  "config_subentries": {
+    "camera_channel": {
+      "entry_type": "Camera Channel",
+      "initiate_flow": {
+        "user": "Add Camera Channel"
+      },
+      "step": {
+        "user": {
+          "title": "Add Camera Channel",
+          "description": "Configure an additional camera channel on the NVR.",
+          "data": {
+            "channel": "Channel Number (1-indexed)",
+            "name": "Channel Name"
+          }
+        },
+        "reconfigure": {
+          "title": "Configure Camera Channel",
+          "description": "Adjust configuration options for this camera channel.",
+          "data": {
+            "name": "Channel Name"
+          }
+        }
+      },
+      "error": {
+        "channel_exists": "A subentry for this channel number already exists."
+      },
+      "abort": {
+        "already_configured": "This channel is already configured as a subentry."
+      }
     }
   }
 }
