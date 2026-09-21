@@ -444,11 +444,12 @@ class CPPlusClient:
 
         channels: list[dict[str, Any]] = []
         for idx, name in sorted(title_map.items()):
-            if not name or (name.startswith("Channel") and idx >= 17):
-                continue
-            smd_info = smd_map.get(idx, {})
             rd_info = remote_devices.get(idx, {})
+            # Exclude unconfigured phantom channels (default name and no address configured)
+            if not name or (re.match(r"^Channel\s*\d+$", name, re.I) and not rd_info.get("Address")):
+                continue
 
+            smd_info = smd_map.get(idx, {})
             raw_model = rd_info.get("DeviceType")
             addr = rd_info.get("Address")
             serial_no = rd_info.get("SerialNo")
@@ -456,23 +457,18 @@ class CPPlusClient:
             http_port = rd_info.get("HttpPort")
             https_port = rd_info.get("HttpsPort")
             vendor = rd_info.get("Vendor")
+            protocol = rd_info.get("Protocol")
 
             # Determine human-friendly and accurate model string & manufacturer
             if raw_model and raw_model != "Default":
                 model = raw_model
-            elif addr and addr.startswith("192.168.1."):
-                last_octet = int(addr.split(".")[-1])
-                if 217 <= last_octet <= 221:
-                    model = "CP-UNC-DA21L3C-Q"
-                elif 212 <= last_octet <= 224:
-                    model = "CP-UNC-TA21L3C-Q"
-                else:
-                    model = "Camera"
+            elif vendor == "CPPLUS" or protocol == "CPPLUS":
+                model = "CP PLUS Camera"
             else:
                 model = "Camera"
 
             # Brand and Native CP PLUS classification
-            if model.startswith("CP-"):
+            if model.startswith("CP-") or vendor == "CPPLUS" or protocol == "CPPLUS":
                 manufacturer = "CP PLUS"
                 is_native_cpplus = True
             elif model.startswith("VTO"):
@@ -501,6 +497,8 @@ class CPPlusClient:
                 "http_port": http_port,
                 "https_port": https_port,
                 "vendor": vendor,
+                "has_smd": idx in smd_map,
+                "has_tripwire": idx in tripwire_map,
                 "smd_human": smd_info.get("human", False) and smd_info.get("enable", False),
                 "smd_vehicle": smd_info.get("vehicle", False) and smd_info.get("enable", False),
                 "tripwire": tripwire_map.get(idx, False),

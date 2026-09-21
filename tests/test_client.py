@@ -75,6 +75,24 @@ class MockDigestNVR:
         if "action=getSystemInfo" in path:
             return web.Response(text="serialNumber=REAL_NVR_SERIAL_12345\r\nappVersion=1.00.14.00.R\r\n")
 
+        if "name=ChannelTitle" in path:
+            return web.Response(
+                text="table.ChannelTitle[0].Name=Gate Camera\r\ntable.ChannelTitle[1].Name=Doorbell\r\ntable.ChannelTitle[17].Name=Channel 18\r\n"
+            )
+
+        if "name=RemoteDevice" in path:
+            return web.Response(
+                text=(
+                    "table.RemoteDevice[0].Address=192.168.1.10\r\ntable.RemoteDevice[0].DeviceType=Default\r\ntable.RemoteDevice[0].Protocol=CPPLUS\r\n"
+                    "table.RemoteDevice[1].Address=192.168.1.11\r\ntable.RemoteDevice[1].DeviceType=VTO6531H\r\ntable.RemoteDevice[1].Vendor=Dahua\r\n"
+                )
+            )
+
+        if "name=SmartMotionDetect" in path:
+            return web.Response(
+                text="table.SmartMotionDetect[0].Enable=true\r\ntable.SmartMotionDetect[0].ObjectTypes.Human=true\r\n"
+            )
+
         if "CrossLineDetection" in path:
             return web.Response(text=self.tripwire_reply)
 
@@ -190,5 +208,38 @@ async def test_bug1_event_listener_halts_on_consecutive_401(mock_nvr):
         # In buggy code: mock receives hundreds/thousands of requests in 0.3s
         attach_requests = sum(v for k, v in mock_nvr.request_counts.items() if "eventManager" in k)
         assert attach_requests <= 3, f"Bug #1 present: event listener hammered server with {attach_requests} requests!"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_channel_filtering_and_classification(mock_nvr):
+    """Verify channel filtering excludes phantom channels and accurately classifies native CP PLUS."""
+    client = CPPlusClient(
+        host=mock_nvr.host,
+        port=mock_nvr.port,
+        username="admin",
+        password="correct_password",
+        device_type=TYPE_NVR,
+        use_ssl=False,
+    )
+    try:
+        channels = await client.async_get_channels()
+        # Should have 2 channels (Gate Camera and Doorbell), Channel 18 phantom excluded
+        assert len(channels) == 2
+
+        ch1 = channels[0]
+        assert ch1["name"] == "Gate Camera"
+        assert ch1["is_native_cpplus"] is True
+        assert ch1["manufacturer"] == "CP PLUS"
+        assert ch1["has_smd"] is True
+        assert ch1["has_tripwire"] is False
+
+        ch2 = channels[1]
+        assert ch2["name"] == "Doorbell"
+        assert ch2["is_native_cpplus"] is False
+        assert ch2["manufacturer"] == "Dahua"
+        assert ch2["has_smd"] is False
+        assert ch2["has_tripwire"] is False
     finally:
         await client.close()
