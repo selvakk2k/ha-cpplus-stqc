@@ -710,12 +710,19 @@ class CPPlusClient:
         }
         return self._device_info
 
+    @staticmethod
+    def _is_ok_response(res: str) -> bool:
+        """Check if CGI response indicates success without substring false positives."""
+        if not res:
+            return False
+        return res.strip().upper().startswith("OK")
+
     async def async_reboot(self) -> bool:
         """Send reboot command to CP PLUS camera or NVR."""
         if self.device_type == TYPE_NVR:
             try:
                 res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=reboot")
-                return "ok" in res.lower() or "success" in res.lower()
+                return self._is_ok_response(res) or "success" in res.lower()
             except Exception as err:
                 _LOGGER.error("Failed to reboot NVR at %s: %s", self.host, err)
                 return False
@@ -764,7 +771,7 @@ class CPPlusClient:
         uri = f"/cgi-bin/configManager.cgi?action=setConfig&VideoInMode[{channel_idx}].Mode={mode}"
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("Failed to set VideoInMode on channel %d: %s", channel_idx, err)
             return False
@@ -776,7 +783,7 @@ class CPPlusClient:
         uri = f"/cgi-bin/configManager.cgi?action=setConfig&Lighting[{channel_idx}][0].Mode={mode}"
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("Failed to set Lighting mode on channel %d: %s", channel_idx, err)
             return False
@@ -793,7 +800,7 @@ class CPPlusClient:
         )
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("Failed to set SMD Human on channel %d: %s", channel_idx, err)
             return False
@@ -810,7 +817,7 @@ class CPPlusClient:
         )
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("Failed to set SMD Vehicle on channel %d: %s", channel_idx, err)
             return False
@@ -823,7 +830,7 @@ class CPPlusClient:
         uri = f"/cgi-bin/configManager.cgi?action=setConfig&CrossLineDetection[{channel_idx}].Enable={en_str}"
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("Failed to set CrossLineDetection on channel %d: %s", channel_idx, err)
             return False
@@ -840,7 +847,7 @@ class CPPlusClient:
         )
         try:
             res = await self.async_nvr_request(uri)
-            if "ok" in res.lower():
+            if self._is_ok_response(res):
                 return True
             # Fallback without 'table.' prefix if NVR firmware prefers Encode[x]
             fallback_uri = (
@@ -849,7 +856,7 @@ class CPPlusClient:
                 f"&Encode[{channel_idx}].ExtraFormat[0].AudioEnable={val}"
             )
             res2 = await self.async_nvr_request(fallback_uri)
-            return "ok" in res2.lower()
+            return self._is_ok_response(res2)
         except Exception as err:
             _LOGGER.error("Failed to set audio enable on channel %d: %s", channel_idx, err)
             return False
@@ -873,7 +880,7 @@ class CPPlusClient:
         )
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("PTZ control failed on channel %d (%s): %s", channel, code, err)
             return False
@@ -885,7 +892,7 @@ class CPPlusClient:
         uri = f"/cgi-bin/ptz.cgi?action=start&channel={channel}&code=GotoPreset&arg1=0&arg2={preset}&arg3=0"
         try:
             res = await self.async_nvr_request(uri)
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.error("PTZ preset %d failed on channel %d: %s", preset, channel, err)
             return False
@@ -931,7 +938,7 @@ class CPPlusClient:
             return False
         try:
             res = await self.async_nvr_request(f"/cgi-bin/mediaFileFind.cgi?action=destroy&object={session_id}")
-            return "ok" in res.lower()
+            return self._is_ok_response(res)
         except Exception as err:
             _LOGGER.debug("Failed to close mediaFileFind session %s: %s", session_id, err)
             return False
@@ -965,7 +972,7 @@ class CPPlusClient:
                     find_uri += f"&condition.Events[{idx}]={et}"
 
             find_res = await self.async_nvr_request(find_uri)
-            if "ok" not in find_res.lower() and "true" not in find_res.lower():
+            if not self._is_ok_response(find_res) and "true" not in find_res.lower():
                 _LOGGER.warning("NVR findFile returned unexpected response: %s", find_res)
                 return []
 
