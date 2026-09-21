@@ -36,43 +36,46 @@ async def async_setup_entry(
             ch_name = ch["name"]
 
             # Human Detection arming switch
-            entities.append(
-                CPPlusDetectionSwitch(
-                    coordinator=coordinator,
-                    channel_idx=ch_idx,
-                    channel_num=ch_num,
-                    channel_name=ch_name,
-                    feature_key="smd_human",
-                    name="Human Detection Arming",
-                    icon="mdi:account-search",
+            if ch.get("has_smd", False):
+                entities.append(
+                    CPPlusDetectionSwitch(
+                        coordinator=coordinator,
+                        channel_idx=ch_idx,
+                        channel_num=ch_num,
+                        channel_name=ch_name,
+                        feature_key="smd_human",
+                        name="Human Detection Arming",
+                        icon="mdi:account-search",
+                    )
                 )
-            )
 
             # Vehicle Detection arming switch
-            entities.append(
-                CPPlusDetectionSwitch(
-                    coordinator=coordinator,
-                    channel_idx=ch_idx,
-                    channel_num=ch_num,
-                    channel_name=ch_name,
-                    feature_key="smd_vehicle",
-                    name="Vehicle Detection Arming",
-                    icon="mdi:car-search",
+            if ch.get("has_smd", False):
+                entities.append(
+                    CPPlusDetectionSwitch(
+                        coordinator=coordinator,
+                        channel_idx=ch_idx,
+                        channel_num=ch_num,
+                        channel_name=ch_name,
+                        feature_key="smd_vehicle",
+                        name="Vehicle Detection Arming",
+                        icon="mdi:car-search",
+                    )
                 )
-            )
 
             # Tripwire arming switch
-            entities.append(
-                CPPlusDetectionSwitch(
-                    coordinator=coordinator,
-                    channel_idx=ch_idx,
-                    channel_num=ch_num,
-                    channel_name=ch_name,
-                    feature_key="tripwire",
-                    name="Tripwire Arming",
-                    icon="mdi:ray-start-end",
+            if ch.get("has_tripwire", False):
+                entities.append(
+                    CPPlusDetectionSwitch(
+                        coordinator=coordinator,
+                        channel_idx=ch_idx,
+                        channel_num=ch_num,
+                        channel_name=ch_name,
+                        feature_key="tripwire",
+                        name="Tripwire Arming",
+                        icon="mdi:ray-start-end",
+                    )
                 )
-            )
 
             # Audio stream transmission switch
             entities.append(

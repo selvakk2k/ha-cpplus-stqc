@@ -2,13 +2,15 @@
 
 from datetime import timedelta
 import logging
+import time
 from typing import Any
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .client import CPPlusClient
+from .client import CPPlusAuthError, CPPlusClient
 from .const import (
     DOMAIN,
     MANUFACTURER,
@@ -39,24 +41,30 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.channels: list[dict[str, Any]] = []
         self.channel_events: dict[int, dict[str, bool]] = {}
         self.parent_device_id: str | None = None
+        self._last_channel_refresh: float = 0.0
 
     def handle_event(self, channel_idx: int, event_code: str, action: str) -> None:
         """Process push event from NVR event stream."""
         is_active = (action.lower() == "start")
         events = self.channel_events.setdefault(channel_idx, {})
+        target_event = None
 
         if event_code in ["SmartMotionHuman", "HumanDetect"]:
-            events[EVENT_HUMAN] = is_active
-            _LOGGER.debug("Channel %d Human detection: %s", channel_idx, is_active)
+            target_event = EVENT_HUMAN
         elif event_code in ["SmartMotionVehicle", "VehicleDetect"]:
-            events[EVENT_VEHICLE] = is_active
-            _LOGGER.debug("Channel %d Vehicle detection: %s", channel_idx, is_active)
+            target_event = EVENT_VEHICLE
         elif event_code in ["CrossLineDetection", "CrossRegionDetection"]:
-            events[EVENT_TRIPWIRE] = is_active
-            _LOGGER.debug("Channel %d Tripwire alert: %s", channel_idx, is_active)
+            target_event = EVENT_TRIPWIRE
         elif event_code in ["VideoMotion"]:
-            events[EVENT_MOTION] = is_active
-            _LOGGER.debug("Channel %d VideoMotion: %s", channel_idx, is_active)
+            target_event = EVENT_MOTION
+
+        has_changed = False
+        if target_event:
+            old_val = events.get(target_event)
+            if old_val != is_active:
+                events[target_event] = is_active
+                has_changed = True
+                _LOGGER.debug("Channel %d %s alert: %s", channel_idx, target_event, is_active)
 
         # Fire native Home Assistant event for automation triggers
         ch = next((c for c in self.channels if c.get("index") == channel_idx or c.get("channel") == channel_idx + 1), {})
@@ -72,8 +80,8 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             },
         )
 
-        # Notify entity listeners immediately without waiting for polling loop
-        if self.data:
+        # Notify entity listeners immediately on actual state toggle
+        if has_changed and self.data:
             new_data = dict(self.data)
             new_data["channel_events"] = dict(self.channel_events)
             self.async_set_updated_data(new_data)
@@ -85,8 +93,22 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.device_info_data = await self.client.async_get_device_info()
 
             if self.client.device_type == TYPE_NVR:
-                if not self.channels:
-                    self.channels = await self.client.async_get_channels()
+                now = time.monotonic()
+                if not self.channels or (now - self._last_channel_refresh >= 600):
+                    try:
+                        new_channels = await self.client.async_get_channels()
+                        if new_channels:
+                            self.channels = new_channels
+                            self._last_channel_refresh = now
+                    except CPPlusAuthError:
+                        raise
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "Channel refresh failed on %s (preserving current channels): %s",
+                            self.client.host,
+                            err,
+                        )
+
                 # Lightweight connection ping
                 await self.client.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
             else:
@@ -102,6 +124,9 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "channels": self.channels,
                 "channel_events": self.channel_events,
             }
+        except CPPlusAuthError as err:
+            _LOGGER.warning("Authentication failed on %s: %s", self.client.host, err)
+            raise ConfigEntryAuthFailed(f"Authentication failed: {err}") from err
         except Exception as err:
             _LOGGER.warning("Coordinator update error on %s: %s", self.client.host, err)
             raise UpdateFailed(f"Error communicating with CP PLUS device at {self.client.host}: {err}") from err
