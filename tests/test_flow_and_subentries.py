@@ -1,8 +1,11 @@
 """Tests for CP PLUS config flow, subentries, and migrations."""
 
-from unittest.mock import AsyncMock, patch
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from types import MappingProxyType
+
+sys.modules.setdefault("turbojpeg", MagicMock())
 
 from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
 from homeassistant.core import HomeAssistant
@@ -186,17 +189,47 @@ async def test_subentry_flow_add_and_reconfigure(hass: HomeAssistant) -> None:
     assert dup_result["type"] == FlowResultType.FORM
     assert dup_result["errors"] == {"channel": "channel_exists"}
 
-    # Reconfigure subentry title
+    # Reconfigure subentry title without direct connection
     reconf_flow = CameraChannelSubentryFlowHandler()
     reconf_flow.hass = hass
     reconf_flow.handler = (entry.entry_id, SUBENTRY_TYPE_CHANNEL)
     reconf_flow.context = {"source": "reconfigure", "subentry_id": subentry.subentry_id}
 
-    reconf_result = await reconf_flow.async_step_reconfigure({"name": "Front Porch Cam"})
+    reconf_result = await reconf_flow.async_step_reconfigure(
+        {"name": "Front Porch Cam", "direct_connection": False}
+    )
     assert reconf_result["type"] == FlowResultType.ABORT
     assert reconf_result["reason"] == "reconfigure_successful"
     assert subentry.title == "Front Porch Cam"
     assert subentry.data["name"] == "Front Porch Cam"
+    assert subentry.data["direct_connection"] is False
+
+    # Reconfigure subentry with direct connection
+    direct_flow = CameraChannelSubentryFlowHandler()
+    direct_flow.hass = hass
+    direct_flow.handler = (entry.entry_id, SUBENTRY_TYPE_CHANNEL)
+    direct_flow.context = {"source": "reconfigure", "subentry_id": subentry.subentry_id}
+
+    step1 = await direct_flow.async_step_reconfigure(
+        {"name": "Front Yard Cam", "direct_connection": True}
+    )
+    assert step1["type"] == FlowResultType.FORM
+    assert step1["step_id"] == "direct_camera"
+
+    step2 = await direct_flow.async_step_direct_camera(
+        {
+            "direct_host": "192.168.1.150",
+            "direct_rtsp_port": 554,
+            "direct_http_port": 80,
+            "use_nvr_credentials": True,
+        }
+    )
+    assert step2["type"] == FlowResultType.ABORT
+    assert step2["reason"] == "reconfigure_successful"
+    assert subentry.title == "Front Yard Cam"
+    assert subentry.data["direct_connection"] is True
+    assert subentry.data["direct_host"] == "192.168.1.150"
+    assert subentry.data["direct_rtsp_port"] == 554
 
 
 @pytest.mark.asyncio
@@ -343,4 +376,51 @@ async def test_async_setup_entry_creates_subentries(hass: HomeAssistant) -> None
         assert subentry_ch2.title == "Lobby ONVIF"
         assert subentry_ch2.data["is_native_cpplus"] is False
         assert subentry_ch2.unique_id == "NVR_SETUP_TEST_ch2"
+
+
+@pytest.mark.asyncio
+async def test_camera_stream_source_direct_and_nvr(hass: HomeAssistant) -> None:
+    """Test camera stream source URL with NVR proxy and direct camera connection."""
+    from custom_components.cpplus.camera import CPPlusCamera
+    from custom_components.cpplus.coordinator import CPPlusDataUpdateCoordinator
+    from custom_components.cpplus.client import CPPlusClient
+
+    client = CPPlusClient(
+        hass,
+        host="192.168.1.100",
+        port=443,
+        rtsp_port=554,
+        username="admin",
+        password="admin123",
+        device_type=TYPE_NVR,
+    )
+    coordinator = CPPlusDataUpdateCoordinator(hass, client, name="Test NVR")
+    coordinator.data = {"serial": "TEST_NVR", "online": True}
+
+    # NVR Proxy Camera
+    cam_nvr = CPPlusCamera(coordinator, channel=1, subtype=0, stream_label="Main", channel_name="Lobby")
+    url_nvr = await cam_nvr.stream_source()
+    assert url_nvr == "rtsp://admin:admin123@192.168.1.100:554/cam/realmonitor?channel=1&subtype=0"
+    assert cam_nvr.extra_state_attributes["connection_mode"] == "nvr_proxy"
+
+    # Direct Camera Connection
+    cam_direct = CPPlusCamera(
+        coordinator,
+        channel=1,
+        subtype=0,
+        stream_label="Main",
+        channel_name="Lobby",
+        subentry_data={
+            "direct_connection": True,
+            "direct_host": "192.168.1.150",
+            "direct_rtsp_port": 554,
+            "direct_username": "camuser",
+            "direct_password": "campassword",
+        },
+    )
+    url_direct = await cam_direct.stream_source()
+    assert url_direct == "rtsp://camuser:campassword@192.168.1.150:554/cam/realmonitor?channel=1&subtype=0"
+    assert cam_direct.extra_state_attributes["connection_mode"] == "direct"
+    assert cam_direct.extra_state_attributes["direct_host"] == "192.168.1.150"
+
 
