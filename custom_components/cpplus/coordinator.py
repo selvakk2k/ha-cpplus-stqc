@@ -49,6 +49,7 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.channels: list[dict[str, Any]] = []
         self.channel_events: dict[int, dict[str, bool]] = {}
         self.parent_device_id: str | None = None
+        self.hub_subentry_id: str | None = None
         self._last_channel_refresh: float = 0.0
 
     def handle_event(self, channel_idx: int, event_code: str, action: str) -> None:

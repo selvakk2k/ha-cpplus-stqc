@@ -16,6 +16,8 @@ from homeassistant.config_entries import (
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import AbortFlow, FlowResult
 
+from homeassistant.helpers import selector
+
 from .client import CPPlusAuthError, CPPlusClient, CPPlusConnectionError, CPPlusError
 from .const import (
     DOMAIN,
@@ -29,6 +31,7 @@ from .const import (
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
     SUBENTRY_TYPE_CHANNEL,
+    SUBENTRY_TYPE_HUB,
     TYPE_NVR,
     TYPE_CAMERA,
 )
@@ -50,6 +53,36 @@ def build_device_schema() -> vol.Schema:
     )
 
 
+class NVRHubSubentryFlowHandler(ConfigSubentryFlow):
+    """Handle subentry flow for NVR hub settings and renaming."""
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Reconfigure the NVR hub subentry title."""
+        config_entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+
+        if user_input is not None:
+            new_name = user_input["name"].strip()
+            return self.async_update_and_abort(
+                config_entry,
+                subentry,
+                title=new_name,
+                data_updates={"name": new_name},
+            )
+
+        schema = vol.Schema(
+            {
+                vol.Required("name", default=subentry.data.get("name", subentry.title)): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=schema,
+        )
+
+
 class CameraChannelSubentryFlowHandler(ConfigSubentryFlow):
     """Handle subentry flow for adding and modifying camera channels under an NVR."""
 
@@ -60,13 +93,24 @@ class CameraChannelSubentryFlowHandler(ConfigSubentryFlow):
         config_entry = self._get_entry()
         errors: dict[str, str] = {}
 
+        existing_channels = {
+            s.data.get("channel")
+            for s in config_entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+            if s.data.get("channel") is not None
+        }
+
+        # Dynamically determine available channels (default up to 32 or max existing)
+        max_ch = max(32, max(existing_channels, default=32))
+        available_channels = [ch for ch in range(1, max_ch + 1) if ch not in existing_channels]
+
+        if not available_channels:
+            return self.async_abort(reason="no_channels_available")
+
         if user_input is not None:
-            ch_num = user_input["channel"]
-            ch_name = user_input["name"].strip()
-            existing_channels = {
-                s.data.get("channel")
-                for s in config_entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
-            }
+            ch_num = int(user_input["channel"])
+            raw_name = user_input.get("name", "")
+            ch_name = raw_name.strip() if raw_name else f"Channel {ch_num}"
+
             if ch_num in existing_channels:
                 errors["channel"] = "channel_exists"
             else:
@@ -82,10 +126,20 @@ class CameraChannelSubentryFlowHandler(ConfigSubentryFlow):
                     },
                 )
 
+        options = [
+            selector.SelectOptionDict(value=str(ch), label=f"Channel {ch}")
+            for ch in available_channels
+        ]
+
         schema = vol.Schema(
             {
-                vol.Required("channel"): vol.All(vol.Coerce(int), vol.Range(min=1, max=64)),
-                vol.Required("name"): str,
+                vol.Required("channel", default=str(available_channels[0])): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=options,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional("name", default=""): str,
             }
         )
         return self.async_show_form(
@@ -137,7 +191,10 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> dict[str, type[config_entries.ConfigSubentryFlow]]:
         """Return subentry flows supported by this integration."""
         if config_entry.data.get(CONF_DEVICE_TYPE) == TYPE_NVR:
-            return {SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler}
+            return {
+                SUBENTRY_TYPE_HUB: NVRHubSubentryFlowHandler,
+                SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler,
+            }
         return {}
 
     async def async_step_user(

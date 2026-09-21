@@ -27,6 +27,7 @@ from .const import (
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
     SUBENTRY_TYPE_CHANNEL,
+    SUBENTRY_TYPE_HUB,
     TYPE_CAMERA,
     TYPE_NVR,
     PTZ_COMMANDS,
@@ -208,14 +209,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             dev_name = f"CP PLUS NVR {coordinator.device_name}"
         else:
             dev_name = f"CP PLUS NVR {model}" if model else "CP PLUS NVR"
+
+        # Register NVR Hub subentry so the NVR device is not orphaned in the UI
+        nvr_subentries = entry.get_subentries_of_type(SUBENTRY_TYPE_HUB)
+        if not nvr_subentries:
+            nvr_subentry = ConfigSubentry(
+                data=MappingProxyType({"name": dev_name}),
+                subentry_type=SUBENTRY_TYPE_HUB,
+                title=dev_name,
+                unique_id=f"{serial}_hub",
+            )
+            hass.config_entries.async_add_subentry(entry, nvr_subentry)
+            nvr_subentry_id = nvr_subentry.subentry_id
+        else:
+            nvr_subentry = nvr_subentries[0]
+            nvr_subentry_id = nvr_subentry.subentry_id
+            if nvr_subentry.title:
+                dev_name = nvr_subentry.title
     else:
+        nvr_subentry_id = None
         if coordinator.device_name and coordinator.device_name != client.host:
             dev_name = f"CP PLUS Camera {coordinator.device_name}"
         else:
             dev_name = f"CP PLUS Camera {model}" if model else "CP PLUS Camera"
 
+    coordinator.hub_subentry_id = nvr_subentry_id
+
     parent_device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
+        config_subentry_id=nvr_subentry_id,
         identifiers={(DOMAIN, serial)},
         name=dev_name,
         manufacturer=MANUFACTURER,
@@ -267,6 +289,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 subentry = existing_subentries[ch_uid]
                 if subentry.title:
                     ch["name"] = subentry.title
+
+    # Ensure any manually created channel subentry has a synthesized channel in coordinator.channels
+    if client.device_type == TYPE_NVR:
+        configured_channel_nums = {ch["channel"] for ch in coordinator.channels}
+        for subentry in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL):
+            ch_num = subentry.data.get("channel")
+            if ch_num and ch_num not in configured_channel_nums:
+                coordinator.channels.append({
+                    "channel": ch_num,
+                    "index": ch_num - 1,
+                    "name": subentry.title or subentry.data.get("name") or f"Channel {ch_num}",
+                    "model": subentry.data.get("model", "Camera"),
+                    "manufacturer": "Generic ONVIF",
+                    "is_native_cpplus": subentry.data.get("is_native_cpplus", False),
+                    "has_smd": subentry.data.get("has_smd", False),
+                    "has_tripwire": subentry.data.get("has_tripwire", False),
+                    "serial": None,
+                    "firmware": None,
+                    "address": None,
+                })
+                configured_channel_nums.add(ch_num)
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 

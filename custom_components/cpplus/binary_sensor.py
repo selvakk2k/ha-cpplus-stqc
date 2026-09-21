@@ -32,8 +32,11 @@ async def async_setup_entry(
     """Set up CP PLUS binary sensors."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
-    # Root connectivity sensor belongs to the main config entry
-    async_add_entities([CPPlusConnectivitySensor(coordinator)])
+    # Root connectivity sensor belongs to the NVR hub subentry (or root entry for standalone)
+    async_add_entities(
+        [CPPlusConnectivitySensor(coordinator)],
+        config_subentry_id=coordinator.hub_subentry_id,
+    )
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
         subentries = {

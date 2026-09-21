@@ -19,11 +19,13 @@ from custom_components.cpplus.const import (
     CONF_NAME,
     CONF_DEVICE_TYPE,
     SUBENTRY_TYPE_CHANNEL,
+    SUBENTRY_TYPE_HUB,
     TYPE_NVR,
     TYPE_CAMERA,
 )
 from custom_components.cpplus.config_flow import (
     CameraChannelSubentryFlowHandler,
+    NVRHubSubentryFlowHandler,
     CPPlusConfigFlow,
 )
 from custom_components.cpplus import async_migrate_entry, async_setup_entry
@@ -134,7 +136,8 @@ async def test_supported_subentry_types() -> None:
     standalone_entry = MockConfigEntry(domain=DOMAIN, data={CONF_DEVICE_TYPE: TYPE_CAMERA})
 
     assert CPPlusConfigFlow.async_get_supported_subentry_types(nvr_entry) == {
-        SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler
+        SUBENTRY_TYPE_HUB: NVRHubSubentryFlowHandler,
+        SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler,
     }
     assert CPPlusConfigFlow.async_get_supported_subentry_types(standalone_entry) == {}
 
@@ -160,7 +163,7 @@ async def test_subentry_flow_add_and_reconfigure(hass: HomeAssistant) -> None:
     flow.handler = (entry.entry_id, SUBENTRY_TYPE_CHANNEL)
     flow.context = {"source": "user"}
 
-    result = await flow.async_step_user({"channel": 1, "name": "Balcony Cam"})
+    result = await flow.async_step_user({"channel": "1", "name": "Balcony Cam"})
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert result["title"] == "Balcony Cam"
     assert result["data"]["channel"] == 1
@@ -180,7 +183,7 @@ async def test_subentry_flow_add_and_reconfigure(hass: HomeAssistant) -> None:
     dup_flow.handler = (entry.entry_id, SUBENTRY_TYPE_CHANNEL)
     dup_flow.context = {"source": "user"}
 
-    dup_result = await dup_flow.async_step_user({"channel": 1, "name": "Duplicate Balcony"})
+    dup_result = await dup_flow.async_step_user({"channel": "1", "name": "Duplicate Balcony"})
     assert dup_result["type"] == FlowResultType.FORM
     assert dup_result["errors"] == {"channel": "channel_exists"}
 
@@ -195,6 +198,41 @@ async def test_subentry_flow_add_and_reconfigure(hass: HomeAssistant) -> None:
     assert reconf_result["reason"] == "reconfigure_successful"
     assert subentry.title == "Front Porch Cam"
     assert subentry.data["name"] == "Front Porch Cam"
+
+
+@pytest.mark.asyncio
+async def test_nvr_hub_subentry_reconfigure(hass: HomeAssistant) -> None:
+    """Test reconfiguring the NVR hub subentry title."""
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=2,
+        data={
+            CONF_HOST: "192.168.1.100",
+            CONF_DEVICE_TYPE: TYPE_NVR,
+            CONF_USERNAME: "admin",
+        },
+        unique_id="NVR_HUB_TEST",
+    )
+    entry.add_to_hass(hass)
+
+    hub_subentry = ConfigSubentry(
+        data=MappingProxyType({"name": "CP PLUS NVR Main"}),
+        subentry_type=SUBENTRY_TYPE_HUB,
+        title="CP PLUS NVR Main",
+        unique_id="NVR_HUB_TEST_hub",
+    )
+    hass.config_entries.async_add_subentry(entry, hub_subentry)
+
+    reconf_flow = NVRHubSubentryFlowHandler()
+    reconf_flow.hass = hass
+    reconf_flow.handler = (entry.entry_id, SUBENTRY_TYPE_HUB)
+    reconf_flow.context = {"source": "reconfigure", "subentry_id": hub_subentry.subentry_id}
+
+    result = await reconf_flow.async_step_reconfigure({"name": "Security Office NVR"})
+    assert result["type"] == FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert hub_subentry.title == "Security Office NVR"
+    assert hub_subentry.data["name"] == "Security Office NVR"
 
 
 @pytest.mark.asyncio
@@ -279,6 +317,11 @@ async def test_async_setup_entry_creates_subentries(hass: HomeAssistant) -> None
 
         setup_ok = await async_setup_entry(hass, entry)
         assert setup_ok is True
+
+        hub_subentries = entry.get_subentries_of_type(SUBENTRY_TYPE_HUB)
+        assert len(hub_subentries) == 1
+        assert hub_subentries[0].title == "CP PLUS NVR Main NVR"
+        assert hub_subentries[0].unique_id == "NVR_SETUP_TEST_hub"
 
         subentries = entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
         assert len(subentries) == 2

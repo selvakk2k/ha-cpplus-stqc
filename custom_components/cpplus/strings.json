@@ -57,6 +57,25 @@
     }
   },
   "config_subentries": {
+    "nvr_hub": {
+      "entry_type": "NVR Hub",
+      "initiate_flow": {
+        "user": "Configure NVR Hub"
+      },
+      "step": {
+        "user": {
+          "title": "Configure NVR Hub",
+          "description": "System settings for the central NVR hub."
+        },
+        "reconfigure": {
+          "title": "Configure NVR Hub",
+          "description": "Adjust configuration options for the central NVR hub.",
+          "data": {
+            "name": "NVR Name"
+          }
+        }
+      }
+    },
     "camera_channel": {
       "entry_type": "Camera Channel",
       "initiate_flow": {
@@ -65,10 +84,10 @@
       "step": {
         "user": {
           "title": "Add Camera Channel",
-          "description": "Configure an additional camera channel on the NVR.",
+          "description": "Select an available channel on the NVR to configure in Home Assistant.",
           "data": {
-            "channel": "Channel Number (1-indexed)",
-            "name": "Channel Name"
+            "channel": "Channel",
+            "name": "Channel Name (Optional)"
           }
         },
         "reconfigure": {
@@ -80,10 +99,12 @@
         }
       },
       "error": {
-        "channel_exists": "A subentry for this channel number already exists."
+        "channel_exists": "A subentry for this channel number already exists.",
+        "no_channels_available": "All channels on this NVR are already configured."
       },
       "abort": {
-        "already_configured": "This channel is already configured as a subentry."
+        "already_configured": "This channel is already configured as a subentry.",
+        "no_channels_available": "All channels on this NVR are already configured."
       }
     }
   }

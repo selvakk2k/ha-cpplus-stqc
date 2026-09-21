@@ -61,5 +61,6 @@ PTZ_COMMANDS: dict[str, str] = {
 }
 
 SUBENTRY_TYPE_CHANNEL = "camera_channel"
+SUBENTRY_TYPE_HUB = "nvr_hub"
 
 

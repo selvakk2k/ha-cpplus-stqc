@@ -27,7 +27,7 @@ async def async_setup_entry(
         CPPlusDiagnosticSensor(coordinator, "firmware", "Firmware Version", "mdi:cellphone-arrow-down"),
         CPPlusDiagnosticSensor(coordinator, "hardware", "Hardware Model", "mdi:chip"),
     ]
-    async_add_entities(root_entities)
+    async_add_entities(root_entities, config_subentry_id=coordinator.hub_subentry_id)
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
         subentries = {
