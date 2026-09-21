@@ -745,24 +745,12 @@ class CPPlusClient:
         )
 
     async def async_get_snapshot(self, channel: int = 1) -> bytes | None:
-        """Fetch a snapshot JPEG image from camera or NVR."""
-        if self.device_type == TYPE_NVR:
-            try:
-                return await self.async_nvr_request_bytes(f"/cgi-bin/snapshot.cgi?channel={channel}")
-            except Exception as err:
-                _LOGGER.debug("HTTP snapshot failed for NVR channel %d at %s: %s", channel, self.host, err)
-                return None
-
-        session = await self._get_session()
-        snapshot_url = f"https://{self.host}:{self.port}/cgi-bin/snapshot.cgi?channel={channel}"
+        """Fetch a snapshot JPEG image from camera or NVR using Digest authentication."""
         try:
-            auth = aiohttp.BasicAuth(self.username, self.password)
-            async with session.get(snapshot_url, auth=auth, timeout=aiohttp.ClientTimeout(total=5)) as resp:
-                if resp.status == 200:
-                    return await resp.read()
+            return await self.async_nvr_request_bytes(f"/cgi-bin/snapshot.cgi?channel={channel}")
         except Exception as err:
-            _LOGGER.debug("HTTP snapshot failed for %s: %s", self.host, err)
-        return None
+            _LOGGER.debug("HTTP snapshot failed for channel %d at %s: %s", channel, self.host, err)
+            return None
 
     async def async_set_video_in_mode(self, channel_idx: int, mode: int) -> bool:
         """Set VideoInMode (Day/Night) for a channel: 0=Color, 1=Auto, 2=Black & White."""
