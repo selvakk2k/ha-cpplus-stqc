@@ -19,6 +19,18 @@ from .const import TYPE_CAMERA, TYPE_NVR
 _LOGGER = logging.getLogger(__name__)
 
 
+class CPPlusError(Exception):
+    """Base exception for CP PLUS STQC client."""
+
+
+class CPPlusAuthError(CPPlusError):
+    """Authentication failed."""
+
+
+class CPPlusConnectionError(CPPlusError):
+    """Connection to device failed."""
+
+
 class AsyncDigestAuth:
     """Helper to perform HTTP Digest Authentication with aiohttp."""
 
@@ -83,6 +95,7 @@ class CPPlusClient:
         password: str = "",
         device_type: str = TYPE_CAMERA,
         session: aiohttp.ClientSession | None = None,
+        use_ssl: bool = True,
     ) -> None:
         """Initialize the CP PLUS STQC client."""
         self.hass = hass
@@ -92,6 +105,8 @@ class CPPlusClient:
         self.username = username
         self.password = password
         self.device_type = device_type
+        self.use_ssl = use_ssl
+        self._scheme = "https" if use_ssl else "http"
         self._external_session = session is not None
         self._session = session
         self._session_id: str | None = None
@@ -116,7 +131,8 @@ class CPPlusClient:
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession."""
         if self._session is None or self._session.closed:
-            connector = aiohttp.TCPConnector(ssl=self._get_ssl_context())
+            ssl_ctx = self._get_ssl_context() if self.use_ssl else False
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
             self._session = aiohttp.ClientSession(
                 connector=connector,
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -266,7 +282,7 @@ class CPPlusClient:
     async def async_detect_device_type(self) -> str:
         """Detect whether the target host is an NVR or a standalone camera."""
         session = await self._get_session()
-        nvr_url = f"https://{self.host}:{self.port}/cgi-bin/magicBox.cgi?action=getDeviceType"
+        nvr_url = f"{self._scheme}://{self.host}:{self.port}/cgi-bin/magicBox.cgi?action=getDeviceType"
         try:
             async with session.get(nvr_url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
                 if resp.status == 401 and "Digest" in resp.headers.get("WWW-Authenticate", ""):
@@ -287,7 +303,7 @@ class CPPlusClient:
         if not self._digest_auth:
             self._digest_auth = AsyncDigestAuth(self.username, self.password)
         session = await self._get_session()
-        url = f"https://{self.host}:{self.port}{uri}"
+        url = f"{self._scheme}://{self.host}:{self.port}{uri}"
 
         headers = {"User-Agent": "Mozilla/5.0"}
         if self._digest_auth.realm and self._digest_auth.nonce:
@@ -312,7 +328,7 @@ class CPPlusClient:
         if not self._digest_auth:
             self._digest_auth = AsyncDigestAuth(self.username, self.password)
         session = await self._get_session()
-        url = f"https://{self.host}:{self.port}{uri}"
+        url = f"{self._scheme}://{self.host}:{self.port}{uri}"
 
         headers = {"User-Agent": "Mozilla/5.0"}
         if self._digest_auth.realm and self._digest_auth.nonce:
@@ -499,13 +515,17 @@ class CPPlusClient:
             self._event_auth = AsyncDigestAuth(self.username, self.password)
 
         if self._event_session is None or self._event_session.closed:
+            ssl_ctx = self._get_ssl_context() if self.use_ssl else False
             self._event_session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(ssl=self._get_ssl_context()),
+                connector=aiohttp.TCPConnector(ssl=ssl_ctx),
                 timeout=aiohttp.ClientTimeout(total=None, sock_read=90),
             )
         session = self._event_session
         uri = "/cgi-bin/eventManager.cgi?action=attach&codes=[All]"
-        url = f"https://{self.host}:{self.port}{uri}"
+        url = f"{self._scheme}://{self.host}:{self.port}{uri}"
+
+        consecutive_401 = 0
+        reconnect_delay = 2.0
 
         while not self._stopped:
             try:
@@ -515,21 +535,44 @@ class CPPlusClient:
 
                 async with session.get(url, headers=headers) as resp:
                     if resp.status == 401:
+                        consecutive_401 += 1
+                        if consecutive_401 >= 2:
+                            _LOGGER.error(
+                                "NVR event stream authentication failed with consecutive 401s on %s. Halting stream.",
+                                self.host,
+                            )
+                            if getattr(self, "on_auth_failed", None):
+                                try:
+                                    self.on_auth_failed()
+                                except Exception:
+                                    pass
+                            raise CPPlusAuthError(f"Authentication failed on NVR event stream {self.host}")
+
                         auth_hdr = resp.headers.get("WWW-Authenticate", "")
                         if "Digest" in auth_hdr:
                             self._event_auth.parse_challenge(auth_hdr)
+                            await asyncio.sleep(0.1)
                             continue
+                        raise CPPlusAuthError(f"NVR event stream 401 missing Digest challenge on {self.host}")
 
                     if resp.status != 200:
-                        _LOGGER.warning("NVR event stream HTTP %s, reconnecting...", resp.status)
-                        await asyncio.sleep(5)
+                        _LOGGER.warning("NVR event stream HTTP %s on %s, reconnecting...", resp.status, self.host)
+                        await asyncio.sleep(reconnect_delay)
+                        reconnect_delay = min(reconnect_delay * 2, 60.0)
                         continue
+
+                    # Reset consecutive 401 counter and backoff upon successful connection
+                    consecutive_401 = 0
+                    reconnect_delay = 2.0
 
                     buffer = ""
                     async for chunk in resp.content.iter_chunked(1024):
                         if self._stopped:
                             break
                         buffer += chunk.decode(errors="ignore")
+                        if len(buffer) > 65536:
+                            buffer = buffer[-32768:]
+
                         while "\n\n" in buffer or "\r\n\r\n" in buffer:
                             parts = re.split(r"\r?\n\r?\n", buffer, maxsplit=1)
                             event_block = parts[0]
@@ -543,7 +586,12 @@ class CPPlusClient:
                                 code = code_m.group(1)
                                 action = action_m.group(1)
                                 ch_idx = int(index_m.group(1))
-                                callback(ch_idx, code, action)
+                                try:
+                                    callback(ch_idx, code, action)
+                                except Exception as cb_err:
+                                    _LOGGER.warning("Error in event callback for channel %d: %s", ch_idx, cb_err)
+            except CPPlusAuthError:
+                raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as err:
                 _LOGGER.debug("NVR event stream reconnecting (%s)", err)
                 await asyncio.sleep(3)
@@ -969,6 +1017,22 @@ class CPPlusClient:
             return results
         finally:
             await self.async_close_find_session(session_id)
+
+    async def close(self) -> None:
+        """Close client sessions and clean up resources."""
+        self._stopped = True
+        if self._logged_in:
+            try:
+                await self.async_call("user.signout", {})
+            except Exception:
+                pass
+            self._logged_in = False
+
+        if not self._external_session and self._session and not self._session.closed:
+            await self._session.close()
+        if self._event_session and not self._event_session.closed:
+            await self._event_session.close()
+
 
 
 
