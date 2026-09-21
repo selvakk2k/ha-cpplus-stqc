@@ -86,6 +86,19 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             new_data["channel_events"] = dict(self.channel_events)
             self.async_set_updated_data(new_data)
 
+    def clear_events(self) -> None:
+        """Clear all active channel events when event stream disconnects."""
+        had_active = False
+        for channel_idx, events in self.channel_events.items():
+            for event_type, is_active in list(events.items()):
+                if is_active:
+                    events[event_type] = False
+                    had_active = True
+        if had_active and self.data:
+            new_data = dict(self.data)
+            new_data["channel_events"] = dict(self.channel_events)
+            self.async_set_updated_data(new_data)
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch latest camera or NVR telemetry."""
         try:

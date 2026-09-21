@@ -21,3 +21,10 @@ env/
 *.swo
 .DS_Store
 Thumbs.db
+
+# Project Scratch & Local Handover
+HANDOVER.md
+scripts/configure_gate_audio.py
+pytest.ini
+scratch/
+*.tar.gz

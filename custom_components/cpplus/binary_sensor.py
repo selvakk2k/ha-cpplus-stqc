@@ -56,7 +56,7 @@ async def async_setup_entry(
             )
 
             # AI Human Detection sensor
-            if ch.get("has_smd", False):
+            if ch.get("is_native_cpplus", False) and ch.get("has_smd", False):
                 entities.append(
                     CPPlusChannelEventSensor(
                         coordinator=coordinator,
@@ -71,7 +71,7 @@ async def async_setup_entry(
                 )
 
             # AI Vehicle Detection sensor
-            if ch.get("has_smd", False):
+            if ch.get("is_native_cpplus", False) and ch.get("has_smd", False):
                 entities.append(
                     CPPlusChannelEventSensor(
                         coordinator=coordinator,
@@ -86,7 +86,7 @@ async def async_setup_entry(
                 )
 
             # Perimeter Tripwire sensor
-            if ch.get("has_tripwire", False):
+            if ch.get("is_native_cpplus", False) and ch.get("has_tripwire", False):
                 entities.append(
                     CPPlusChannelEventSensor(
                         coordinator=coordinator,

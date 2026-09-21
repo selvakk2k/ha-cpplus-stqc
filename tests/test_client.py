@@ -85,6 +85,7 @@ class MockDigestNVR:
                 text=(
                     "table.RemoteDevice[0].Address=192.168.1.10\r\ntable.RemoteDevice[0].DeviceType=Default\r\ntable.RemoteDevice[0].Protocol=CPPLUS\r\n"
                     "table.RemoteDevice[1].Address=192.168.1.11\r\ntable.RemoteDevice[1].DeviceType=VTO6531H\r\ntable.RemoteDevice[1].Vendor=Dahua\r\n"
+                    "table.RemoteDevice[17].Address=0.0.0.0\r\ntable.RemoteDevice[17].DeviceType=Default\r\ntable.RemoteDevice[17].Enable=false\r\n"
                 )
             )
 
@@ -243,3 +244,66 @@ async def test_channel_filtering_and_classification(mock_nvr):
         assert ch2["has_tripwire"] is False
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_event_listener_callbacks(mock_nvr):
+    """Verify on_auth_failed is triggered on 401 lockout and on_disconnect on stream disconnect."""
+    auth_failed_called = False
+    disconnect_called = False
+
+    def on_auth_failed():
+        nonlocal auth_failed_called
+        auth_failed_called = True
+
+    def on_disconnect():
+        nonlocal disconnect_called
+        disconnect_called = True
+
+    client = CPPlusClient(
+        host=mock_nvr.host,
+        port=mock_nvr.port,
+        username="admin",
+        password="WRONG_PASSWORD",
+        device_type=TYPE_NVR,
+        use_ssl=False,
+    )
+    try:
+        task = asyncio.create_task(
+            client.async_start_event_listener(
+                lambda ch, code, act: None,
+                on_auth_failed=on_auth_failed,
+                on_disconnect=on_disconnect,
+            )
+        )
+        await asyncio.sleep(0.3)
+        client._stopped = True
+        try:
+            await asyncio.wait_for(task, timeout=1.0)
+        except Exception:
+            pass
+
+        assert auth_failed_called is True
+        assert disconnect_called is True
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_async_reboot_success(mock_nvr):
+    """Verify async_reboot recognizes 'success' or 'OK' responses."""
+    client = CPPlusClient(
+        host=mock_nvr.host,
+        port=mock_nvr.port,
+        username="admin",
+        password="correct_password",
+        device_type=TYPE_NVR,
+        use_ssl=False,
+    )
+    try:
+        # Mock returns "OK\r\n" by default for unmatched queries like /cgi-bin/magicBox.cgi?action=reboot
+        result = await client.async_reboot()
+        assert result is True
+    finally:
+        await client.close()
+

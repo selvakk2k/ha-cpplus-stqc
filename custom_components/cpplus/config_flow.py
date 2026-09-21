@@ -97,6 +97,8 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (CPPlusConnectionError, ConnectionError) as err:
                 _LOGGER.warning("Connection error configuring CP PLUS %s: %s", host, err)
                 errors["base"] = "invalid_auth" if "Authentication failed" in str(err) else "cannot_connect"
+            except config_entries.AbortFlow:
+                raise
             except Exception as err:
                 _LOGGER.exception("Unexpected exception in CP PLUS config flow: %s", err)
                 errors["base"] = "cannot_connect"
@@ -176,6 +178,8 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (CPPlusConnectionError, ConnectionError) as err:
                 _LOGGER.warning("Connection error during reauth: %s", err)
                 errors["base"] = "cannot_connect"
+            except config_entries.AbortFlow:
+                raise
             except Exception as err:
                 _LOGGER.exception("Unexpected exception in reauth: %s", err)
                 errors["base"] = "cannot_connect"

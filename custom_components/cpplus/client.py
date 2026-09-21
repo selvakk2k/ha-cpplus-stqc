@@ -405,8 +405,11 @@ class CPPlusClient:
                     prop = m_rd.group(2)
                     val = m_rd.group(3).strip()
                     remote_devices.setdefault(idx, {})[prop] = val
+        except CPPlusAuthError:
+            raise
         except Exception as err:
-            _LOGGER.debug("Could not query RemoteDevice: %s", err)
+            _LOGGER.warning("Could not query RemoteDevice on %s: %s", self.host, err)
+            raise CPPlusConnectionError(f"Failed to query RemoteDevice on {self.host}: {err}") from err
 
         video_mode_map: dict[int, int] = {}
         try:
@@ -445,13 +448,16 @@ class CPPlusClient:
         channels: list[dict[str, Any]] = []
         for idx, name in sorted(title_map.items()):
             rd_info = remote_devices.get(idx, {})
-            # Exclude unconfigured phantom channels (default name and no address configured)
-            if not name or (re.match(r"^Channel\s*\d+$", name, re.I) and not rd_info.get("Address")):
+            addr = rd_info.get("Address", "")
+            is_configured = bool(addr and addr != "0.0.0.0" and rd_info.get("Enable", "true").lower() != "false")
+            is_custom_name = not bool(re.match(r"^(?:Channel|CAM|D)\s*\d+$", name, re.I))
+
+            # Exclude unconfigured phantom slots (no configured IP address and default factory title)
+            if not name or not (is_configured or is_custom_name):
                 continue
 
             smd_info = smd_map.get(idx, {})
             raw_model = rd_info.get("DeviceType")
-            addr = rd_info.get("Address")
             serial_no = rd_info.get("SerialNo")
             firmware_ver = rd_info.get("Version")
             http_port = rd_info.get("HttpPort")
@@ -510,7 +516,12 @@ class CPPlusClient:
         self._channels = channels
         return channels
 
-    async def async_start_event_listener(self, callback: Callable[[int, str, str], None]) -> None:
+    async def async_start_event_listener(
+        self,
+        callback: Callable[[int, str, str], None],
+        on_auth_failed: Callable[[], None] | None = None,
+        on_disconnect: Callable[[], None] | None = None,
+    ) -> None:
         """Connect to eventManager.cgi and dispatch real-time events to callback."""
         if self.device_type != TYPE_NVR:
             return
@@ -545,9 +556,9 @@ class CPPlusClient:
                                 "NVR event stream authentication failed with consecutive 401s on %s. Halting stream.",
                                 self.host,
                             )
-                            if getattr(self, "on_auth_failed", None):
+                            if on_auth_failed:
                                 try:
-                                    self.on_auth_failed()
+                                    on_auth_failed()
                                 except Exception:
                                     pass
                             raise CPPlusAuthError(f"Authentication failed on NVR event stream {self.host}")
@@ -561,6 +572,11 @@ class CPPlusClient:
 
                     if resp.status != 200:
                         _LOGGER.warning("NVR event stream HTTP %s on %s, reconnecting...", resp.status, self.host)
+                        if on_disconnect:
+                            try:
+                                on_disconnect()
+                            except Exception:
+                                pass
                         await asyncio.sleep(reconnect_delay)
                         reconnect_delay = min(reconnect_delay * 2, 60.0)
                         continue
@@ -594,13 +610,35 @@ class CPPlusClient:
                                     callback(ch_idx, code, action)
                                 except Exception as cb_err:
                                     _LOGGER.warning("Error in event callback for channel %d: %s", ch_idx, cb_err)
+
+                    # Stream closed or broke
+                    if on_disconnect:
+                        try:
+                            on_disconnect()
+                        except Exception:
+                            pass
             except CPPlusAuthError:
+                if on_disconnect:
+                    try:
+                        on_disconnect()
+                    except Exception:
+                        pass
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as err:
                 _LOGGER.debug("NVR event stream reconnecting (%s)", err)
+                if on_disconnect:
+                    try:
+                        on_disconnect()
+                    except Exception:
+                        pass
                 await asyncio.sleep(3)
             except Exception as err:
                 _LOGGER.error("Unexpected error in NVR event listener: %s", err)
+                if on_disconnect:
+                    try:
+                        on_disconnect()
+                    except Exception:
+                        pass
                 await asyncio.sleep(5)
 
     async def async_get_device_info(self) -> dict[str, Any]:
@@ -720,7 +758,7 @@ class CPPlusClient:
         if self.device_type == TYPE_NVR:
             try:
                 res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=reboot")
-                return self._is_ok_response(res) or "success" in res.lower()
+                return self._is_ok_response(res) or res.strip().lower() == "success"
             except Exception as err:
                 _LOGGER.error("Failed to reboot NVR at %s: %s", self.host, err)
                 return False
@@ -884,173 +922,23 @@ class CPPlusClient:
             return False
 
     async def async_close(self) -> None:
-        """Close background connections and session."""
+        """Close background connections and sessions."""
         self._stopped = True
-        if self._event_session and not self._event_session.closed:
-            await self._event_session.close()
-        if not self._external_session and self._session and not self._session.closed:
-            await self._session.close()
-
-    def get_playback_url(self, channel: int, start_time: str, end_time: str) -> str:
-        """Return the RTSP playback URL for the requested channel and time range.
-
-        Timestamps format: 'YYYY_MM_DD_HH_MM_SS' (e.g. 2026_09_20_14_00_00) or 'YYYY-MM-DD HH:MM:SS'.
-        """
-        username = urllib.parse.quote(self.username, safe="")
-        password = urllib.parse.quote(self.password, safe="")
-        start_fmt = start_time.replace("-", "_").replace(" ", "_").replace(":", "_")
-        end_fmt = end_time.replace("-", "_").replace(" ", "_").replace(":", "_")
-        return (
-            f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
-            f"/cam/playback?channel={channel}&starttime={start_fmt}&endtime={end_fmt}"
-        )
-
-    async def async_create_find_session(self) -> str | None:
-        """Create a file find session on the NVR."""
-        if self.device_type != TYPE_NVR:
-            return None
-        try:
-            res = await self.async_nvr_request("/cgi-bin/mediaFileFind.cgi?action=factory.create")
-            for line in res.splitlines():
-                if line.startswith("result="):
-                    return line.split("=", 1)[1].strip()
-        except Exception as err:
-            _LOGGER.error("Failed to create mediaFileFind session on %s: %s", self.host, err)
-        return None
-
-    async def async_close_find_session(self, session_id: str) -> bool:
-        """Destroy a file find session on the NVR."""
-        if self.device_type != TYPE_NVR:
-            return False
-        try:
-            res = await self.async_nvr_request(f"/cgi-bin/mediaFileFind.cgi?action=destroy&object={session_id}")
-            return self._is_ok_response(res)
-        except Exception as err:
-            _LOGGER.debug("Failed to close mediaFileFind session %s: %s", session_id, err)
-            return False
-
-    async def async_find_recordings(
-        self,
-        channel: int,
-        start_time: str,
-        end_time: str,
-        count: int = 50,
-        event_types: list[str] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Search NVR for recorded clips within a time range (YYYY-MM-DD HH:MM:SS)."""
-        if self.device_type != TYPE_NVR:
-            return []
-
-        session_id = await self.async_create_find_session()
-        if not session_id:
-            return []
-
-        try:
-            start_encoded = urllib.parse.quote(start_time)
-            end_encoded = urllib.parse.quote(end_time)
-            find_uri = (
-                f"/cgi-bin/mediaFileFind.cgi?action=findFile&object={session_id}"
-                f"&condition.Channel={channel}&condition.StartTime={start_encoded}"
-                f"&condition.EndTime={end_encoded}&condition.Types[0]=dav"
-            )
-            if event_types:
-                for idx, et in enumerate(event_types):
-                    find_uri += f"&condition.Events[{idx}]={et}"
-
-            find_res = await self.async_nvr_request(find_uri)
-            if not self._is_ok_response(find_res) and "true" not in find_res.lower():
-                _LOGGER.warning("NVR findFile returned unexpected response: %s", find_res)
-                return []
-
-            next_uri = f"/cgi-bin/mediaFileFind.cgi?action=findNextFile&object={session_id}&count={count}"
-            next_res = await self.async_nvr_request(next_uri)
-
-            items: dict[int, dict[str, Any]] = {}
-            for line in next_res.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                m = re.match(r"items\[(\d+)\]\.([a-zA-Z0-9_\[\]]+)=(.*)", line)
-                if m:
-                    idx = int(m.group(1))
-                    key = m.group(2)
-                    val = m.group(3)
-                    if idx not in items:
-                        items[idx] = {}
-                    if key == "FilePath":
-                        items[idx]["path"] = val
-                    elif key == "StartTime":
-                        items[idx]["start_time"] = val
-                    elif key == "EndTime":
-                        items[idx]["end_time"] = val
-                    elif key == "Length":
-                        try:
-                            items[idx]["length"] = int(val)
-                            items[idx]["size_mb"] = round(int(val) / (1024 * 1024), 1)
-                        except ValueError:
-                            items[idx]["length"] = 0
-                            items[idx]["size_mb"] = 0.0
-                    elif key == "Type":
-                        items[idx]["type"] = val
-                    elif key.startswith("Flags"):
-                        items[idx].setdefault("flags", []).append(val)
-
-            results: list[dict[str, Any]] = []
-            for idx in sorted(items.keys()):
-                item = items[idx]
-                if "path" in item:
-                    flags = item.get("flags", [])
-                    path_str = item.get("path", "")
-                    # Extract Dahua/CP PLUS filename tag [M]=Motion, [R]=Regular, [A]=Alarm, [H]=Human, [V]=Vehicle
-                    m_tag = re.search(r"\[([a-zA-Z0-9]+)\]\[\d+@\d+\]", path_str)
-                    tag = m_tag.group(1).upper() if m_tag else ""
-
-                    if "HUMAN" in tag or any("Human" in f for f in flags):
-                        event_type = "Human"
-                    elif "VEHICLE" in tag or any("Vehicle" in f for f in flags):
-                        event_type = "Vehicle"
-                    elif tag == "M" or "[M]" in path_str or any("Motion" in f for f in flags):
-                        event_type = "Motion"
-                    elif tag == "A" or any("Alarm" in f for f in flags):
-                        event_type = "Alarm"
-                    elif tag == "R" or any("Regular" in f for f in flags):
-                        event_type = "Continuous"
-                    elif any("Event" in f for f in flags):
-                        event_type = "AI Event"
-                    else:
-                        event_type = "Continuous"
-                    item["event_type"] = event_type
-
-                    duration = 0
-                    if "start_time" in item and "end_time" in item:
-                        try:
-                            t_start = datetime.strptime(item["start_time"], "%Y-%m-%d %H:%M:%S")
-                            t_end = datetime.strptime(item["end_time"], "%Y-%m-%d %H:%M:%S")
-                            duration = int((t_end - t_start).total_seconds())
-                        except Exception:
-                            duration = 0
-                    item["duration"] = duration
-                    item["channel"] = channel
-                    results.append(item)
-
-            return results
-        finally:
-            await self.async_close_find_session(session_id)
-
-    async def close(self) -> None:
-        """Close client sessions and clean up resources."""
-        self._stopped = True
-        if self._logged_in:
+        if self._logged_in and self.device_type == TYPE_CAMERA:
             try:
-                await self.async_call("user.signout", {})
+                await self.async_call_rpc("user.signout")
             except Exception:
                 pass
             self._logged_in = False
 
-        if not self._external_session and self._session and not self._session.closed:
-            await self._session.close()
         if self._event_session and not self._event_session.closed:
             await self._event_session.close()
+        if not self._external_session and self._session and not self._session.closed:
+            await self._session.close()
+
+    async def close(self) -> None:
+        """Alias for async_close."""
+        await self.async_close()
 
 
 

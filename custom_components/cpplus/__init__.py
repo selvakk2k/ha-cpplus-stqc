@@ -5,7 +5,9 @@ from __future__ import annotations
 import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv, device_registry as dr, entity_registry as er
+from homeassistant.helpers.event import async_call_later
 import voluptuous as vol
 
 from .client import CPPlusClient
@@ -56,8 +58,16 @@ def _resolve_coordinators(hass: HomeAssistant, call: ServiceCall) -> list[CPPlus
                         matched.append(coordinators_map[entry_id])
         if matched:
             return matched
+        raise ServiceValidationError(f"Target device '{target_devices}' was not found in CP PLUS integration.")
 
-    return list(coordinators_map.values())
+    # Automatically target the single entry if exactly one exists
+    if len(coordinators_map) == 1:
+        return list(coordinators_map.values())
+
+    # If multiple entries exist and target was omitted, fail closed
+    raise ServiceValidationError(
+        "Multiple CP PLUS devices found. Please specify target device_id in the service call."
+    )
 
 
 async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
@@ -74,23 +84,26 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
         """Handle PTZ movement service call."""
         channel = call.data.get("channel", 1)
         cmd_name = call.data.get("command", "up").lower()
+        if cmd_name not in PTZ_COMMANDS:
+            raise ServiceValidationError(f"Invalid PTZ command '{cmd_name}'. Valid commands: {list(PTZ_COMMANDS.keys())}")
         speed = call.data.get("speed", 5)
         duration = call.data.get("duration")
-        ptz_cmd = PTZ_COMMANDS.get(cmd_name, "Up")
+        ptz_cmd = PTZ_COMMANDS[cmd_name]
 
         for coord in _resolve_coordinators(hass, call):
             await coord.client.async_ptz_control(channel=channel, code=ptz_cmd, arg2=speed, stop=False)
             if duration:
-                async def _auto_stop(c=coord, ch=channel, cmd=ptz_cmd, dur=duration):
-                    await asyncio.sleep(dur)
+                async def _auto_stop_cb(_now: Any, c=coord, ch=channel, cmd=ptz_cmd) -> None:
                     await c.client.async_ptz_control(channel=ch, code=cmd, stop=True)
-                hass.async_create_task(_auto_stop())
+                async_call_later(hass, duration, _auto_stop_cb)
 
     async def handle_ptz_stop(call: ServiceCall) -> None:
         """Handle PTZ stop service call."""
         channel = call.data.get("channel", 1)
         cmd_name = call.data.get("command", "up").lower()
-        ptz_cmd = PTZ_COMMANDS.get(cmd_name, "Up")
+        if cmd_name not in PTZ_COMMANDS:
+            raise ServiceValidationError(f"Invalid PTZ command '{cmd_name}'. Valid commands: {list(PTZ_COMMANDS.keys())}")
+        ptz_cmd = PTZ_COMMANDS[cmd_name]
         for coord in _resolve_coordinators(hass, call):
             await coord.client.async_ptz_control(channel=channel, code=ptz_cmd, stop=True)
 
@@ -118,7 +131,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 {
                     vol.Optional("device_id"): cv.string,
                     vol.Optional("channel", default=1): cv.positive_int,
-                    vol.Required("command"): cv.string,
+                    vol.Required("command"): vol.In(list(PTZ_COMMANDS.keys())),
                     vol.Optional("speed", default=5): vol.All(vol.Coerce(int), vol.Range(min=1, max=8)),
                     vol.Optional("duration"): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=60.0)),
                 }
@@ -134,7 +147,7 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
                 {
                     vol.Optional("device_id"): cv.string,
                     vol.Optional("channel", default=1): cv.positive_int,
-                    vol.Optional("command", default="up"): cv.string,
+                    vol.Optional("command", default="up"): vol.In(list(PTZ_COMMANDS.keys())),
                 }
             ),
         )
@@ -204,7 +217,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Starting real-time NVR event listener for %s", host)
         entry.async_create_background_task(
             hass,
-            client.async_start_event_listener(coordinator.handle_event),
+            client.async_start_event_listener(
+                coordinator.handle_event,
+                on_auth_failed=lambda: entry.async_start_reauth(hass),
+                on_disconnect=coordinator.clear_events,
+            ),
             f"cpplus_event_listener_{host}",
         )
 
