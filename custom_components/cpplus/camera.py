@@ -25,8 +25,9 @@ async def async_setup_entry(
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
         subentries = {
-            s.data.get("channel"): s
+            int(s.data["channel"]): s
             for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+            if "channel" in s.data
         }
         for ch in coordinator.channels:
             ch_num = ch["channel"]

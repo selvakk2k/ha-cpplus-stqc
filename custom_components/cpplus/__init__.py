@@ -249,17 +249,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    if client.device_type == TYPE_NVR:
-        _LOGGER.info("Starting real-time NVR event listener for %s", host)
-        entry.async_create_background_task(
-            hass,
-            client.async_start_event_listener(
-                coordinator.handle_event,
-                on_auth_failed=lambda: entry.async_start_reauth(hass),
-                on_disconnect=coordinator.clear_events,
-            ),
-            f"cpplus_event_listener_{host}",
-        )
+    _LOGGER.info("Starting real-time event listener for %s (%s)", host, client.device_type)
+    entry.async_create_background_task(
+        hass,
+        client.async_start_event_listener(
+            coordinator.handle_event,
+            on_auth_failed=lambda: entry.async_start_reauth(hass),
+            on_disconnect=coordinator.clear_events,
+        ),
+        f"cpplus_event_listener_{host}",
+    )
 
     # Register camera channel subentries for NVR entries
     if client.device_type == TYPE_NVR and coordinator.channels:

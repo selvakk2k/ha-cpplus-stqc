@@ -25,8 +25,9 @@ async def async_setup_entry(
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
         subentries = {
-            s.data.get("channel"): s
+            int(s.data["channel"]): s
             for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+            if "channel" in s.data
         }
         for ch in coordinator.channels:
             # Only create control switches for native CP PLUS cameras (CP-*)
@@ -99,6 +100,63 @@ async def async_setup_entry(
             if entities:
                 async_add_entities(entities, config_subentry_id=subentry_id)
 
+    elif coordinator.channels:
+        # Standalone Camera single channel
+        ch = coordinator.channels[0]
+        standalone_switches: list[SwitchEntity] = []
+
+        if ch.get("has_smd", False):
+            standalone_switches.append(
+                CPPlusDetectionSwitch(
+                    coordinator=coordinator,
+                    channel_idx=0,
+                    channel_num=1,
+                    channel_name=None,
+                    feature_key="smd_human",
+                    name="Human Detection Arming",
+                    icon="mdi:account-search",
+                )
+            )
+            standalone_switches.append(
+                CPPlusDetectionSwitch(
+                    coordinator=coordinator,
+                    channel_idx=0,
+                    channel_num=1,
+                    channel_name=None,
+                    feature_key="smd_vehicle",
+                    name="Vehicle Detection Arming",
+                    icon="mdi:car-search",
+                )
+            )
+
+        if ch.get("has_tripwire", False):
+            standalone_switches.append(
+                CPPlusDetectionSwitch(
+                    coordinator=coordinator,
+                    channel_idx=0,
+                    channel_num=1,
+                    channel_name=None,
+                    feature_key="tripwire",
+                    name="Tripwire Arming",
+                    icon="mdi:ray-start-end",
+                )
+            )
+
+        standalone_switches.append(
+            CPPlusDetectionSwitch(
+                coordinator=coordinator,
+                channel_idx=0,
+                channel_num=1,
+                channel_name=None,
+                feature_key="audio_enable",
+                name="Audio Stream",
+                icon="mdi:microphone",
+            )
+        )
+
+        if standalone_switches:
+            async_add_entities(standalone_switches, config_subentry_id=coordinator.hub_subentry_id)
+
 
 class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], SwitchEntity):
     """Switch entity to toggle AI detection and tripwire algorithms per channel."""
@@ -111,7 +169,7 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
         coordinator: CPPlusDataUpdateCoordinator,
         channel_idx: int,
         channel_num: int,
-        channel_name: str,
+        channel_name: str | None,
         feature_key: str,
         name: str,
         icon: str,
@@ -122,16 +180,20 @@ class CPPlusDetectionSwitch(CoordinatorEntity[CPPlusDataUpdateCoordinator], Swit
         self._channel_num = channel_num
         self._channel_name = channel_name
         self._feature_key = feature_key
+        self._attr_name = name
+        self._attr_icon = icon
 
-        nvr_serial = (
+        serial = (
             self.coordinator.data.get("serial", self.coordinator.client.host)
             if self.coordinator.data
             else self.coordinator.client.host
         )
-        self._attr_unique_id = f"{nvr_serial}_ch{channel_num}_{feature_key}_switch"
-        self._attr_name = name
-        self._attr_icon = icon
-        self._attr_device_info = self.coordinator.get_channel_device_info(channel_num, channel_name)
+        if channel_name:
+            self._attr_unique_id = f"{serial}_ch{channel_num}_{feature_key}_switch"
+            self._attr_device_info = self.coordinator.get_channel_device_info(channel_num, channel_name)
+        else:
+            self._attr_unique_id = f"{serial}_{feature_key}_switch"
+            self._attr_device_info = self.coordinator.device_info
 
     @property
     def is_on(self) -> bool:

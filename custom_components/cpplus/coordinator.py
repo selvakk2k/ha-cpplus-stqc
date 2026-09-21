@@ -112,30 +112,31 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fetch latest camera or NVR telemetry."""
         try:
             if not self.device_info_data:
-                self.device_info_data = await self.client.async_get_device_info()
+                fallback_serial = self.config_entry.unique_id if self.config_entry and self.config_entry.unique_id else None
+                self.device_info_data = await self.client.async_get_device_info(fallback_serial=fallback_serial)
+
+            now = time.monotonic()
+            if not self.channels or (now - self._last_channel_refresh >= 600):
+                try:
+                    new_channels = await self.client.async_get_channels()
+                    if new_channels:
+                        self.channels = new_channels
+                        self._last_channel_refresh = now
+                except CPPlusAuthError:
+                    raise
+                except Exception as err:
+                    _LOGGER.debug(
+                        "Channel refresh failed on %s (preserving current channels): %s",
+                        self.client.host,
+                        err,
+                    )
 
             if self.client.device_type == TYPE_NVR:
-                now = time.monotonic()
-                if not self.channels or (now - self._last_channel_refresh >= 600):
-                    try:
-                        new_channels = await self.client.async_get_channels()
-                        if new_channels:
-                            self.channels = new_channels
-                            self._last_channel_refresh = now
-                    except CPPlusAuthError:
-                        raise
-                    except Exception as err:
-                        _LOGGER.debug(
-                            "Channel refresh failed on %s (preserving current channels): %s",
-                            self.client.host,
-                            err,
-                        )
-
                 # Lightweight connection ping
                 await self.client.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
             else:
-                # Periodic ping / keepalive query to test connection on standalone camera
-                await self.client.async_call_rpc("magicBox.getDeviceType")
+                # Lightweight connection ping: verify camera web server is responsive
+                await self.client.async_ping()
 
             return {
                 "online": True,
