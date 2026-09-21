@@ -1,17 +1,26 @@
 reboot:
   name: Reboot Device
   description: Reboots the CP PLUS camera or NVR hardware remotely.
-  target:
-    device:
-      integration: cpplus
+  fields:
+    device_id:
+      name: Device
+      description: Target CP PLUS camera or NVR hardware.
+      required: false
+      selector:
+        device:
+          integration: cpplus
 
 ptz_move:
   name: PTZ Move
   description: Commands a PTZ-capable camera channel to pan, tilt, or zoom, optionally auto-stopping after duration.
-  target:
-    device:
-      integration: cpplus
   fields:
+    device_id:
+      name: Device
+      description: Target CP PLUS device.
+      required: false
+      selector:
+        device:
+          integration: cpplus
     channel:
       name: Channel
       description: Camera channel number on the NVR (1-indexed).
@@ -74,10 +83,14 @@ ptz_move:
 ptz_stop:
   name: PTZ Stop
   description: Stops ongoing PTZ movement or zoom action on a camera channel.
-  target:
-    device:
-      integration: cpplus
   fields:
+    device_id:
+      name: Device
+      description: Target CP PLUS device.
+      required: false
+      selector:
+        device:
+          integration: cpplus
     channel:
       name: Channel
       description: Camera channel number on the NVR (1-indexed).
@@ -118,10 +131,14 @@ ptz_stop:
 ptz_preset:
   name: PTZ Go To Preset
   description: Commands a PTZ-capable camera channel to move to a saved preset position.
-  target:
-    device:
-      integration: cpplus
   fields:
+    device_id:
+      name: Device
+      description: Target CP PLUS device.
+      required: false
+      selector:
+        device:
+          integration: cpplus
     channel:
       name: Channel
       description: Camera channel number on the NVR (1-indexed).
