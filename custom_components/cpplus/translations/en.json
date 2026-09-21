@@ -97,27 +97,13 @@
           "title": "Configure Camera Channel",
           "description": "Adjust configuration options for this camera channel.",
           "data": {
-            "name": "Channel Name",
-            "direct_connection": "Direct Camera Connection (Bypass NVR for streaming)"
-          }
-        },
-        "direct_camera": {
-          "title": "Direct Camera Connection",
-          "description": "Configure direct RTSP stream connection to the camera hardware.",
-          "data": {
-            "direct_host": "Camera IP / Hostname",
-            "direct_rtsp_port": "RTSP Port",
-            "direct_http_port": "HTTP Port",
-            "use_nvr_credentials": "Use NVR credentials",
-            "direct_username": "Custom Username (Optional)",
-            "direct_password": "Custom Password (Optional)"
+            "name": "Channel Name"
           }
         }
       },
       "error": {
         "channel_exists": "A subentry for this channel number already exists.",
-        "no_channels_available": "All channels on this NVR are already configured.",
-        "invalid_host": "Please enter a valid IP address or hostname."
+        "no_channels_available": "All channels on this NVR are already configured."
       },
       "abort": {
         "already_configured": "This channel is already configured as a subentry.",
