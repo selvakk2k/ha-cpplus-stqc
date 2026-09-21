@@ -12,6 +12,13 @@
           "port": "HTTPS Port (Default: 443)",
           "rtsp_port": "RTSP Port (Default: 554)"
         }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate CP PLUS Device",
+        "description": "Please enter the updated password for {username} on {host}.",
+        "data": {
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -20,7 +27,9 @@
       "unknown": "An unexpected error occurred."
     },
     "abort": {
-      "already_configured": "This CP PLUS camera is already configured."
+      "already_configured": "This CP PLUS camera is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "wrong_device": "The device responded with a different serial number than the configured device."
     }
   }
 }

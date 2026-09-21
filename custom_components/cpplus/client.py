@@ -148,7 +148,7 @@ class CPPlusClient:
         """Perform the challenge-response login over /cpapi2_Login."""
         async with self._lock:
             session = await self._get_session()
-            login_url = f"https://{self.host}:{self.port}/cpapi2_Login"
+            login_url = f"{self._scheme}://{self.host}:{self.port}/cpapi2_Login"
 
             # Step 1: Request authentication challenge (firstLogin)
             req1 = {
@@ -228,7 +228,7 @@ class CPPlusClient:
             if not data2.get("result"):
                 error_msg = data2.get("error", {}).get("message", "Invalid credentials")
                 _LOGGER.warning("Authentication failed for %s on %s: %s", self.username, self.host, error_msg)
-                raise ConnectionError(f"Authentication failed: {error_msg}")
+                raise CPPlusAuthError(f"Authentication failed: {error_msg}")
 
             self._session_id = data2.get("session") or challenge_session
             self._logged_in = True
@@ -317,8 +317,11 @@ class CPPlusClient:
                     headers["Authorization"] = self._digest_auth.build_header(method, uri)
                     async with session.request(method, url, headers=headers, data=data) as retry_resp:
                         if retry_resp.status == 401:
-                            raise ConnectionError("Authentication failed on NVR")
+                            raise CPPlusAuthError(f"Authentication failed on NVR {self.host}")
+                        if retry_resp.status != 200:
+                            raise ConnectionError(f"NVR HTTP error {retry_resp.status} on {uri}")
                         return await retry_resp.text()
+                raise CPPlusAuthError(f"NVR 401 missing Digest challenge on {self.host}")
             elif resp.status == 200:
                 return await resp.text()
             raise ConnectionError(f"NVR HTTP error {resp.status} on {uri}")
@@ -342,8 +345,11 @@ class CPPlusClient:
                     headers["Authorization"] = self._digest_auth.build_header(method, uri)
                     async with session.request(method, url, headers=headers, data=data) as retry_resp:
                         if retry_resp.status == 401:
-                            raise ConnectionError("Authentication failed on NVR")
+                            raise CPPlusAuthError(f"Authentication failed on NVR {self.host}")
+                        if retry_resp.status != 200:
+                            raise ConnectionError(f"NVR HTTP error {retry_resp.status} on {uri}")
                         return await retry_resp.read()
+                raise CPPlusAuthError(f"NVR 401 missing Digest challenge on {self.host}")
             elif resp.status == 200:
                 return await resp.read()
             raise ConnectionError(f"NVR HTTP error {resp.status} on {uri}")
@@ -606,7 +612,7 @@ class CPPlusClient:
 
         if self.device_type == TYPE_NVR:
             model = "CP PLUS STQC NVR"
-            serial = self.host.replace(".", "_")
+            serial = ""
             firmware = "Unknown"
 
             try:
@@ -614,6 +620,8 @@ class CPPlusClient:
                 for line in dev_res.splitlines():
                     if line.startswith("type="):
                         model = line.split("=", 1)[1].strip()
+            except CPPlusAuthError:
+                raise
             except Exception as err:
                 _LOGGER.debug("NVR getDeviceType error on %s: %s", self.host, err)
 
@@ -624,8 +632,14 @@ class CPPlusClient:
                         serial = line.split("=", 1)[1].strip()
                     elif line.startswith("appVersion="):
                         firmware = line.split("=", 1)[1].strip()
+            except CPPlusAuthError:
+                raise
             except Exception as err:
                 _LOGGER.debug("NVR getSystemInfo error on %s: %s", self.host, err)
+                raise CPPlusConnectionError(f"Failed to communicate with NVR at {self.host}: {err}") from err
+
+            if not serial:
+                raise CPPlusError(f"Failed to retrieve valid serial number from NVR at {self.host}")
 
             if firmware == "Unknown":
                 try:
@@ -633,6 +647,8 @@ class CPPlusClient:
                     for line in ver_res.splitlines():
                         if line.startswith("version="):
                             firmware = line.split("=", 1)[1].strip()
+                except CPPlusAuthError:
+                    raise
                 except Exception as err:
                     _LOGGER.debug("NVR getSoftwareVersion error on %s: %s", self.host, err)
 
@@ -649,32 +665,42 @@ class CPPlusClient:
             await self.async_login()
 
         model = "CP PLUS STQC IPC"
-        serial = self.host.replace(".", "_")
+        serial = ""
         firmware = "Unknown"
 
         try:
             res = await self.async_call_rpc("magicBox.getDeviceType")
             if res.get("result") and "type" in res.get("params", {}):
                 model = res["params"]["type"]
+        except CPPlusAuthError:
+            raise
         except Exception as err:
             _LOGGER.debug("Could not get device type on %s: %s", self.host, err)
-
-        try:
-            res = await self.async_call_rpc("configManager.getConfig", {"name": "General"})
-            if res.get("result"):
-                table = res.get("params", {}).get("table", {})
-                machine_name = table.get("MachineName")
-                if machine_name:
-                    serial = machine_name
-        except Exception as err:
-            _LOGGER.debug("Could not get General config on %s: %s", self.host, err)
 
         try:
             res = await self.async_call_rpc("magicBox.getSerialNo")
             if res.get("result") and "serial" in res.get("params", {}):
                 serial = res["params"]["serial"]
+        except CPPlusAuthError:
+            raise
         except Exception:
             pass
+
+        if not serial:
+            try:
+                res = await self.async_call_rpc("configManager.getConfig", {"name": "General"})
+                if res.get("result"):
+                    table = res.get("params", {}).get("table", {})
+                    machine_name = table.get("MachineName")
+                    if machine_name:
+                        serial = machine_name
+            except CPPlusAuthError:
+                raise
+            except Exception as err:
+                _LOGGER.debug("Could not get General config on %s: %s", self.host, err)
+
+        if not serial:
+            raise CPPlusError(f"Failed to retrieve serial number from camera at {self.host}")
 
         self._device_info = {
             "serial": serial,
