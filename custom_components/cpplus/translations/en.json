@@ -106,9 +106,6 @@
     },
     "hub": {
       "entry_type": "NVR Hub",
-      "initiate_flow": {
-        "user": "Configure NVR Hub"
-      },
       "step": {
         "user": {
           "title": "Configure NVR Hub",
@@ -174,9 +171,6 @@
     },
     "channel": {
       "entry_type": "Camera Channel",
-      "initiate_flow": {
-        "user": "Add Camera Channel"
-      },
       "step": {
         "user": {
           "title": "Add Camera Channel",

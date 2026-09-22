@@ -382,4 +382,57 @@ async def test_subentry_add_standard_channel(hass: HomeAssistant, enable_custom_
     assert res2["data"]["is_native_cpplus"] is True
 
 
+@pytest.mark.asyncio
+async def test_supported_subentry_types_single_button(hass: HomeAssistant):
+    """Verify that only SUBENTRY_TYPE_CHANNEL is returned to prevent duplicate UI buttons."""
+    from custom_components.cpplus.config_flow import CPPlusConfigFlow, CameraChannelSubentryFlowHandler
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry_nvr = MockConfigEntry(
+        domain=DOMAIN,
+        title="CP PLUS NVR",
+        data={
+            CONF_HOST: "10.0.29.200",
+            CONF_DEVICE_TYPE: TYPE_NVR,
+        },
+    )
+    supported_nvr = CPPlusConfigFlow.async_get_supported_subentry_types(entry_nvr)
+    assert len(supported_nvr) == 1
+    assert SUBENTRY_TYPE_CHANNEL in supported_nvr
+    assert supported_nvr[SUBENTRY_TYPE_CHANNEL] is CameraChannelSubentryFlowHandler
+
+    entry_cam = MockConfigEntry(
+        domain=DOMAIN,
+        title="CP PLUS Camera",
+        data={
+            CONF_HOST: "10.0.29.212",
+            CONF_DEVICE_TYPE: TYPE_CAMERA,
+        },
+    )
+    supported_cam = CPPlusConfigFlow.async_get_supported_subentry_types(entry_cam)
+    assert supported_cam == {}
+
+
+@pytest.mark.asyncio
+async def test_async_get_device_by_identifier_helper(hass: HomeAssistant):
+    """Test device registry helper uses async_get_device_by_identifier when available."""
+    from custom_components.cpplus import _async_get_device_by_identifier
+    from homeassistant.helpers import device_registry as dr
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(domain=DOMAIN, title="Test Entry")
+    entry.add_to_hass(hass)
+
+    dev_reg = dr.async_get(hass)
+    dev = dev_reg.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, "test_channel_uid")},
+        name="Test Camera",
+    )
+
+    found = _async_get_device_by_identifier(dev_reg, (DOMAIN, "test_channel_uid"), entry.entry_id)
+    assert found is not None
+    assert found.id == dev.id
+
+
 

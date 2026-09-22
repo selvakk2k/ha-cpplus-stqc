@@ -45,6 +45,15 @@ from typing import Any
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 
+def _async_get_device_by_identifier(
+    dev_reg: dr.DeviceRegistry, identifier: tuple[str, str], config_entry_id: str
+) -> dr.DeviceEntry | None:
+    """Get device by identifier with backward-compatible fallback."""
+    if hasattr(dev_reg, "async_get_device_by_identifier"):
+        return dev_reg.async_get_device_by_identifier(identifier, config_entry_id)
+    return dev_reg.async_get_device(identifiers={identifier})
+
+
 def _resolve_coordinators(hass: HomeAssistant, call: ServiceCall) -> list[CPPlusDataUpdateCoordinator]:
     """Resolve target coordinators from service call device or config entry targets."""
     coordinators_map: dict[str, CPPlusDataUpdateCoordinator] = hass.data.get(DOMAIN, {})
@@ -282,7 +291,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         ch["name"] = subentry.title
 
                 # Associate existing device in registry with subentry so HA UI groups them cleanly
-                dev = device_registry.async_get_device(identifiers={(DOMAIN, ch_uid)})
+                dev = _async_get_device_by_identifier(device_registry, (DOMAIN, ch_uid), entry.entry_id)
                 if dev and dev.config_subentry_id != subentry.subentry_id:
                     _LOGGER.info(
                         "Associating device %s (%s) with subentry %s",
@@ -311,7 +320,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ch_uid = f"{serial}_ch{ch['channel']}"
             subentry = subentries_by_uid.get(ch_uid)
             if subentry:
-                dev = device_registry.async_get_device(identifiers={(DOMAIN, ch_uid)})
+                dev = _async_get_device_by_identifier(device_registry, (DOMAIN, ch_uid), entry.entry_id)
                 if dev and dev.config_subentry_id != subentry.subentry_id:
                     device_registry.async_update_device(
                         dev.id,

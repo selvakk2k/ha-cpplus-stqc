@@ -1,7 +1,7 @@
 """Tests for CP PLUS STQC standalone camera support."""
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from homeassistant.core import HomeAssistant
 
 from custom_components.cpplus.client import CPPlusClient
@@ -105,6 +105,99 @@ async def test_standalone_camera_firmware_extraction():
     assert info["hardware"] == "CP-UNC-TA21L3C-Q"
     assert info["serial"] == "O55DOBEK0WN5AC6L"
     assert info["firmware"] == "2.860.00AT002.0.R (Build: 2025-12-03)"
+    await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_standalone_camera_serial_cascade_system_device_info():
+    """Test serial extraction when magicBox.getSerialNo is missing and system.getDeviceInfo provides it."""
+    client = CPPlusClient(
+        host="10.0.29.212",
+        port=80,
+        rtsp_port=554,
+        username="admin",
+        password="cam_password",
+        device_type=TYPE_CAMERA,
+    )
+    client._logged_in = True
+
+    async def mock_rpc(method: str, params: dict | None = None) -> dict:
+        if method == "magicBox.getDeviceType":
+            return {"result": False}
+        if method == "magicBox.getSerialNo":
+            return {"result": False}
+        if method == "magicBox.getSystemInfo":
+            return {"result": False}
+        if method == "system.getDeviceInfo":
+            return {
+                "result": True,
+                "params": {
+                    "deviceInfo": {
+                        "serialNumber": "CASCADE_SERIAL_789",
+                        "deviceType": "CP-UNC-DA21L3C-Q",
+                    }
+                },
+            }
+        return {"result": False}
+
+    with patch.object(client, "async_call_rpc", side_effect=mock_rpc):
+        info = await client.async_get_device_info()
+
+    assert info["hardware"] == "CP-UNC-DA21L3C-Q"
+    assert info["serial"] == "CASCADE_SERIAL_789"
+    await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_standalone_camera_serial_cascade_fallback_to_host():
+    """Test safe host fallback when camera provides no serial number via any method."""
+    client = CPPlusClient(
+        host="10.0.29.212",
+        port=80,
+        rtsp_port=554,
+        username="admin",
+        password="cam_password",
+        device_type=TYPE_CAMERA,
+    )
+    client._logged_in = True
+
+    with patch.object(client, "async_call_rpc", return_value={"result": False}), \
+         patch.object(client, "async_nvr_request", side_effect=Exception("No CGI")):
+        info = await client.async_get_device_info()
+
+    assert info["serial"] == "CP_10_0_29_212"
+    await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_async_call_rpc_uses_http_scheme():
+    """Verify async_call_rpc uses http:// when use_ssl is False (port 80)."""
+    client = CPPlusClient(
+        host="10.0.29.212",
+        port=80,
+        rtsp_port=554,
+        username="admin",
+        password="cam_password",
+        device_type=TYPE_CAMERA,
+    )
+    client._logged_in = True
+    client._session_id = "test_session_id"
+
+    mock_session = MagicMock()
+    mock_resp = AsyncMock()
+    mock_resp.status = 200
+    mock_resp.json = AsyncMock(return_value={"result": True, "params": {}})
+    mock_cm = MagicMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_resp)
+    mock_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_session.post.return_value = mock_cm
+
+    with patch.object(client, "_get_session", new_callable=AsyncMock, return_value=mock_session):
+        await client.async_call_rpc("magicBox.getDeviceType")
+
+    called_url = mock_session.post.call_args[0][0]
+    assert called_url == "http://10.0.29.212:80/cpapi2"
+    assert not called_url.startswith("https://")
     await client.async_close()
 
 

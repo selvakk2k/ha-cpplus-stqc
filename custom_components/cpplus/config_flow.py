@@ -357,7 +357,6 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             return {}
         return {
             SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler,
-            LEGACY_SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler,
         }
 
     async def async_step_user(

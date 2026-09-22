@@ -103,7 +103,7 @@ class CPPlusClient:
         password: str = "",
         device_type: str | None = None,
         session: aiohttp.ClientSession | None = None,
-        use_ssl: bool = True,
+        use_ssl: bool | None = None,
         stream_profile: str | None = None,
         rtsp_over_tls: bool = False,
     ) -> None:
@@ -115,6 +115,8 @@ class CPPlusClient:
         self.username = username
         self.password = password
         self.device_type = device_type
+        if use_ssl is None:
+            use_ssl = (port == 443)
         self.use_ssl = use_ssl
         self.stream_profile = stream_profile
         self.rtsp_over_tls = rtsp_over_tls
@@ -254,7 +256,7 @@ class CPPlusClient:
             await self.async_login()
 
         session = await self._get_session()
-        rpc_url = f"https://{self.host}:{self.port}/cpapi2"
+        rpc_url = f"{self._scheme}://{self.host}:{self.port}/cpapi2"
 
         req = {
             "method": method,
@@ -781,8 +783,9 @@ class CPPlusClient:
 
         try:
             res = await self.async_call_rpc("magicBox.getSerialNo")
-            if res.get("result") and "serial" in res.get("params", {}):
-                serial = res["params"]["serial"]
+            if res.get("result"):
+                params = res.get("params", {})
+                serial = params.get("serial") or params.get("sn") or params.get("serialNumber") or params.get("SerialNo") or ""
         except CPPlusAuthError:
             raise
         except Exception:
@@ -794,7 +797,41 @@ class CPPlusClient:
                 if res.get("result"):
                     params = res.get("params", {})
                     info = params.get("info", params)
-                    serial = info.get("SerialNo") or info.get("serialNumber") or info.get("Serial") or ""
+                    serial = (
+                        info.get("SerialNo")
+                        or info.get("serialNumber")
+                        or info.get("Serial")
+                        or info.get("sn")
+                        or info.get("SN")
+                        or ""
+                    )
+            except Exception:
+                pass
+
+        if not serial:
+            try:
+                res = await self.async_call_rpc("system.getDeviceInfo")
+                if res.get("result"):
+                    params = res.get("params", {})
+                    info = params.get("deviceInfo", params)
+                    serial = (
+                        info.get("serialNumber")
+                        or info.get("serial")
+                        or info.get("sn")
+                        or info.get("SerialNo")
+                        or ""
+                    )
+                    if not model or model == "CP PLUS STQC IPC":
+                        model = info.get("deviceType") or info.get("hardwareVersion") or model
+            except Exception:
+                pass
+
+        if not serial:
+            try:
+                res = await self.async_call_rpc("configManager.getConfig", {"name": "General"})
+                if res.get("result"):
+                    table = res.get("params", {}).get("table", {})
+                    serial = table.get("MachineAddress") or table.get("MachineName") or ""
             except Exception:
                 pass
 
@@ -804,11 +841,28 @@ class CPPlusClient:
                 for line in sys_res.splitlines():
                     if line.startswith("serialNumber="):
                         serial = line.split("=", 1)[1].strip()
+                        break
             except Exception:
                 pass
 
         if not serial:
-            raise CPPlusError(f"Failed to retrieve serial number from camera at {self.host}")
+            try:
+                net_res = await self.async_nvr_request("/cgi-bin/netApp.cgi?action=getNetInterface")
+                for line in net_res.splitlines():
+                    if "PhysicalAddress=" in line:
+                        mac = line.split("PhysicalAddress=", 1)[1].strip().replace(":", "").replace("-", "").upper()
+                        if mac:
+                            serial = f"CP_{mac}"
+                            break
+            except Exception:
+                pass
+
+        if not serial:
+            _LOGGER.warning(
+                "Could not retrieve hardware serial number from camera at %s; using host-based unique identifier",
+                self.host,
+            )
+            serial = f"CP_{self.host.replace('.', '_')}"
 
         try:
             res = await self.async_call_rpc("magicBox.getSoftwareVersion")
