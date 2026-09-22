@@ -272,14 +272,46 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         unique_id=ch_uid,
                     )
                     hass.config_entries.async_add_subentry(entry, subentry)
+                    existing_subentries[ch_uid] = subentry
                 else:
                     subentry = existing_subentries[ch_uid]
                     if subentry.title:
                         ch["name"] = subentry.title
 
+                # Associate existing device in registry with subentry so HA UI groups them cleanly
+                dev = device_registry.async_get_device(identifiers={(DOMAIN, ch_uid)})
+                if dev and dev.config_subentry_id != subentry.subentry_id:
+                    _LOGGER.info(
+                        "Associating device %s (%s) with subentry %s",
+                        dev.name,
+                        ch_uid,
+                        subentry.subentry_id,
+                    )
+                    device_registry.async_update_device(
+                        dev.id,
+                        new_config_subentry_id=subentry.subentry_id,
+                    )
+
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Ensure all channel devices in the registry are linked to their corresponding subentry
+    if client.device_type == TYPE_NVR and coordinator.channels:
+        subentries_by_uid = {
+            s.unique_id: s
+            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
+        for ch in coordinator.channels:
+            ch_uid = f"{serial}_ch{ch['channel']}"
+            subentry = subentries_by_uid.get(ch_uid)
+            if subentry:
+                dev = device_registry.async_get_device(identifiers={(DOMAIN, ch_uid)})
+                if dev and dev.config_subentry_id != subentry.subentry_id:
+                    device_registry.async_update_device(
+                        dev.id,
+                        new_config_subentry_id=subentry.subentry_id,
+                    )
 
     # Purge orphaned switch and select entities for non-native camera channels
     if client.device_type == TYPE_NVR and coordinator.channels:
