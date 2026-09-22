@@ -203,3 +203,41 @@ async def test_stqc_rpc_fallback_when_cgi_fails() -> None:
     assert ch["audio_enable"] is True
 
     await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stqc_firmware_detection_from_system_info_or_config_manager() -> None:
+    """Test that firmware version is resolved from magicBox.getSystemInfo case-insensitively or configManager."""
+    client = CPPlusClient("10.0.29.212", 443, "admin", "secret", device_type=TYPE_CAMERA)
+    client.async_cgi_request = AsyncMock(side_effect=CPPlusError("HTTP error 404"))
+
+    async def mock_rpc(method: str, params: dict | None = None) -> dict:
+        if method == "magicBox.getDeviceType":
+            return {"result": True, "params": {"type": "CP-UNC-TA21L3C-Q"}}
+        if method == "magicBox.getSerialNo":
+            return {"result": True, "params": {"serial": "O55DOBEK0WN5AC6L"}}
+        if method == "magicBox.getSoftwareVersion":
+            return {"result": False}
+        if method == "magicBox.getSystemInfo":
+            return {
+                "result": True,
+                "params": {
+                    "info": {
+                        "deviceType": "CP-UNC-TA21L3C-Q",
+                        "serialNumber": "O55DOBEK0WN5AC6L",
+                        "softwareVersion": "3.100.0000000.1.R",
+                        "buildDate": "2024-01-15",
+                    }
+                },
+            }
+        return {"result": False}
+
+    client.async_call_rpc = AsyncMock(side_effect=mock_rpc)
+    client._logged_in = True
+
+    info = await client.async_get_device_info()
+    assert info["hardware"] == "CP-UNC-TA21L3C-Q"
+    assert info["serial"] == "O55DOBEK0WN5AC6L"
+    assert info["firmware"] == "3.100.0000000.1.R,build:2024-01-15"
+    await client.async_close()
+

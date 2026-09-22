@@ -24,6 +24,7 @@ from .const import (
     CONF_PASSWORD,
     CONF_NAME,
     CONF_DEVICE_TYPE,
+    CONF_STREAM_PROFILE,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
     SUBENTRY_TYPE_CHANNEL,
@@ -177,8 +178,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})
 
     host = entry.data[CONF_HOST]
-    port = entry.data.get(CONF_PORT, DEFAULT_PORT_HTTPS)
-    rtsp_port = entry.data.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP)
+    port = entry.options.get(CONF_PORT, entry.data.get(CONF_PORT, DEFAULT_PORT_HTTPS))
+    rtsp_port = entry.options.get(CONF_RTSP_PORT, entry.data.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP))
+    stream_profile = entry.options.get(CONF_STREAM_PROFILE, entry.data.get(CONF_STREAM_PROFILE))
     username = entry.data[CONF_USERNAME]
     password = entry.data.get(CONF_PASSWORD, "")
     name = entry.data.get(CONF_NAME, host)
@@ -192,7 +194,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         username=username,
         password=password,
         device_type=device_type,
+        stream_profile=stream_profile,
     )
+
+    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
     coordinator = CPPlusDataUpdateCoordinator(hass, client, name, entry=entry)
     await coordinator.async_config_entry_first_refresh()

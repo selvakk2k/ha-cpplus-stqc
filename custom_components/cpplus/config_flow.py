@@ -28,8 +28,13 @@ from .const import (
     CONF_PASSWORD,
     CONF_NAME,
     CONF_DEVICE_TYPE,
+    CONF_STREAM_PROFILE,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
+    STREAM_PROFILE_DAHUA_CH0,
+    STREAM_PROFILE_DAHUA_CH1,
+    STREAM_PROFILE_LIVE,
+    STREAM_PROFILE_ONVIF,
     SUBENTRY_TYPE_CHANNEL,
     SUBENTRY_TYPE_HUB,
     TYPE_NVR,
@@ -202,6 +207,14 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if config_entry.data.get(CONF_DEVICE_TYPE) == TYPE_NVR:
             return {SUBENTRY_TYPE_CHANNEL: CameraChannelSubentryFlowHandler}
         return {}
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> config_entries.OptionsFlow:
+        """Get the options flow for this handler."""
+        return CPPlusOptionsFlowHandler()
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -383,4 +396,66 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "username": self._reauth_entry.data[CONF_USERNAME],
                 "host": self._reauth_entry.data[CONF_HOST],
             },
+        )
+
+
+class CPPlusOptionsFlowHandler(config_entries.OptionsFlow):
+    """Handle options flow for CP PLUS camera and NVR configurations."""
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage CP PLUS connection and stream options."""
+        if user_input is not None:
+            return self.async_create_entry(title="", data=user_input)
+
+        device_type = self.config_entry.data.get(CONF_DEVICE_TYPE, TYPE_CAMERA)
+        current_profile = self.config_entry.options.get(
+            CONF_STREAM_PROFILE,
+            self.config_entry.data.get(
+                CONF_STREAM_PROFILE,
+                STREAM_PROFILE_DAHUA_CH0 if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1,
+            ),
+        )
+        current_rtsp_port = self.config_entry.options.get(
+            CONF_RTSP_PORT,
+            self.config_entry.data.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP),
+        )
+        current_port = self.config_entry.options.get(
+            CONF_PORT,
+            self.config_entry.data.get(CONF_PORT, DEFAULT_PORT_HTTPS),
+        )
+
+        stream_profiles = [
+            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH0, label="Dahua Realmonitor (Channel 0 - Single Camera Default)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH1, label="Dahua Realmonitor (Channel 1 - NVR Default)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_ONVIF, label="ONVIF Profile S (/onvif1 Main, /onvif2 Sub)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_LIVE, label="Live Stream (/live)"),
+        ]
+
+        options_schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_STREAM_PROFILE,
+                    default=current_profile,
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=stream_profiles,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Required(
+                    CONF_RTSP_PORT,
+                    default=current_rtsp_port,
+                ): int,
+                vol.Required(
+                    CONF_PORT,
+                    default=current_port,
+                ): int,
+            }
+        )
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=options_schema,
         )

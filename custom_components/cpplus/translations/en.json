@@ -110,5 +110,18 @@
         "no_channels_available": "All channels on this NVR are already configured."
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Configure Connection & Stream Options",
+        "description": "Adjust stream profile, RTSP streaming port, and HTTP/HTTPS connection port.",
+        "data": {
+          "stream_profile": "RTSP Stream Profile",
+          "rtsp_port": "RTSP Port (Default: 554)",
+          "port": "HTTP / HTTPS Port (Default: 443, Camera Default: 80)"
+        }
+      }
+    }
   }
 }

@@ -354,6 +354,12 @@ async def test_camera_stream_source(hass: HomeAssistant) -> None:
     from custom_components.cpplus.camera import CPPlusCamera
     from custom_components.cpplus.coordinator import CPPlusDataUpdateCoordinator
     from custom_components.cpplus.client import CPPlusClient
+    from custom_components.cpplus.const import (
+        STREAM_PROFILE_DAHUA_CH0,
+        STREAM_PROFILE_DAHUA_CH1,
+        STREAM_PROFILE_ONVIF,
+        STREAM_PROFILE_LIVE,
+    )
 
     client = CPPlusClient(
         hass,
@@ -361,7 +367,7 @@ async def test_camera_stream_source(hass: HomeAssistant) -> None:
         port=443,
         rtsp_port=554,
         username="admin",
-        password="admin123",
+        password="admin!123",
         device_type=TYPE_NVR,
     )
     coordinator = CPPlusDataUpdateCoordinator(hass, client, name="Test NVR")
@@ -369,6 +375,92 @@ async def test_camera_stream_source(hass: HomeAssistant) -> None:
 
     cam = CPPlusCamera(coordinator, channel=1, subtype=0, stream_label="Main", channel_name="Lobby")
     url = await cam.stream_source()
-    assert url == "rtsp://admin:admin123@192.168.1.100:554/cam/realmonitor?channel=1&subtype=0"
+    assert url == "rtsp://admin:admin!123@192.168.1.100:554/cam/realmonitor?channel=1&subtype=0"
+
+    # Standalone camera defaults to channel 0
+    client_cam = CPPlusClient(
+        hass,
+        host="10.0.29.212",
+        port=80,
+        rtsp_port=554,
+        username="admin",
+        password="admin!123",
+        device_type=TYPE_CAMERA,
+    )
+    coordinator_cam = CPPlusDataUpdateCoordinator(hass, client_cam, name="Test Camera")
+    coordinator_cam.data = {"serial": "TEST_CAM", "online": True}
+    cam_standalone = CPPlusCamera(coordinator_cam, channel=1, subtype=0, stream_label="Main")
+    url_cam = await cam_standalone.stream_source()
+    assert url_cam == "rtsp://admin:admin!123@10.0.29.212:554/cam/realmonitor?channel=0&subtype=0"
+
+    # ONVIF profile test
+    client_onvif = CPPlusClient(
+        hass,
+        host="10.0.29.212",
+        port=80,
+        rtsp_port=554,
+        username="admin",
+        password="admin!123",
+        device_type=TYPE_CAMERA,
+        stream_profile=STREAM_PROFILE_ONVIF,
+    )
+    assert client_onvif.get_stream_url(1, 0) == "rtsp://admin:admin!123@10.0.29.212:554/onvif1"
+    assert client_onvif.get_stream_url(1, 1) == "rtsp://admin:admin!123@10.0.29.212:554/onvif2"
+
+    # Live profile test
+    client_live = CPPlusClient(
+        hass,
+        host="10.0.29.212",
+        port=80,
+        rtsp_port=554,
+        username="admin",
+        password="admin!123",
+        device_type=TYPE_CAMERA,
+        stream_profile=STREAM_PROFILE_LIVE,
+    )
+    assert client_live.get_stream_url(1, 0) == "rtsp://admin:admin!123@10.0.29.212:554/live"
+
+
+@pytest.mark.asyncio
+async def test_options_flow(hass: HomeAssistant) -> None:
+    """Test options flow for stream profile and ports."""
+    from custom_components.cpplus.const import (
+        CONF_STREAM_PROFILE,
+        STREAM_PROFILE_ONVIF,
+    )
+    from custom_components.cpplus.config_flow import CPPlusOptionsFlowHandler
+
+    mock_entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id="OPTIONS_TEST_CAM",
+        data={
+            CONF_HOST: "10.0.29.212",
+            CONF_PORT: 80,
+            CONF_RTSP_PORT: 554,
+            CONF_USERNAME: "admin",
+            CONF_PASSWORD: "secret_password",
+            CONF_DEVICE_TYPE: TYPE_CAMERA,
+        },
+    )
+    mock_entry.add_to_hass(hass)
+    options_flow = CPPlusOptionsFlowHandler()
+    options_flow.hass = hass
+    options_flow.handler = mock_entry.entry_id
+
+    result = await options_flow.async_step_init()
+    assert result["type"] == FlowResultType.FORM
+    assert result["step_id"] == "init"
+
+    result2 = await options_flow.async_step_init(
+        user_input={
+            CONF_STREAM_PROFILE: STREAM_PROFILE_ONVIF,
+            CONF_RTSP_PORT: 554,
+            CONF_PORT: 80,
+        },
+    )
+    assert result2["type"] == FlowResultType.CREATE_ENTRY
+    assert result2["data"][CONF_STREAM_PROFILE] == STREAM_PROFILE_ONVIF
+    assert result2["data"][CONF_PORT] == 80
+
 
 

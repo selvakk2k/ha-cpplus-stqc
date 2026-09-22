@@ -14,7 +14,14 @@ from datetime import datetime
 from typing import Any, Callable
 import aiohttp
 
-from .const import TYPE_CAMERA, TYPE_NVR
+from .const import (
+    STREAM_PROFILE_DAHUA_CH0,
+    STREAM_PROFILE_DAHUA_CH1,
+    STREAM_PROFILE_LIVE,
+    STREAM_PROFILE_ONVIF,
+    TYPE_CAMERA,
+    TYPE_NVR,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -100,6 +107,7 @@ class CPPlusClient:
         device_type: str = TYPE_CAMERA,
         session: aiohttp.ClientSession | None = None,
         use_ssl: bool = True,
+        stream_profile: str | None = None,
     ) -> None:
         """Initialize the CP PLUS STQC client."""
         self.hass = hass
@@ -110,6 +118,9 @@ class CPPlusClient:
         self.password = password
         self.device_type = device_type
         self.use_ssl = use_ssl
+        self.stream_profile = stream_profile or (
+            STREAM_PROFILE_DAHUA_CH0 if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
+        )
         self._scheme = "https" if use_ssl else "http"
         self._external_session = session is not None
         self._session = session
@@ -999,7 +1010,10 @@ class CPPlusClient:
                         if model == "CP PLUS STQC IPC":
                             model = info.get("deviceType") or info.get("type") or model
                         if firmware == "Unknown":
-                            firmware = info.get("appVersion") or info.get("softwareVersion") or info.get("version") or "Unknown"
+                            v = info.get("appVersion") or info.get("softwareVersion") or info.get("version")
+                            b = info.get("buildDate") or info.get("build") or info.get("buildTime")
+                            if v and v != "Unknown":
+                                firmware = f"{v},build:{b}" if b else v
                 except Exception:
                     pass
 
@@ -1022,24 +1036,32 @@ class CPPlusClient:
                             if res.get("result"):
                                 p = res.get("params", {})
                                 info_dict = p.get("info", p) if isinstance(p.get("info"), dict) else p
-                                v = (
-                                    info_dict.get("version")
-                                    or info_dict.get("softwareVersion")
-                                    or info_dict.get("appVersion")
-                                )
-                                b = (
-                                    info_dict.get("buildDate")
-                                    or info_dict.get("build")
-                                    or info_dict.get("buildTime")
-                                )
-                                if isinstance(v, str) and v and v != "Unknown":
+                                v = None
+                                b = None
+                                if isinstance(info_dict, dict):
+                                    for k, val in info_dict.items():
+                                        k_lower = k.lower()
+                                        if k_lower in ("version", "softwareversion", "appversion", "sysversion", "firmwareversion") and val and val != "Unknown":
+                                            v = str(val)
+                                        elif k_lower in ("builddate", "build", "buildtime") and val:
+                                            b = str(val)
+                                if v:
                                     firmware = f"{v},build:{b}" if b else v
                                     break
-                                elif isinstance(v, dict):
-                                    sub_v = v.get("version") or v.get("softwareVersion")
-                                    sub_b = v.get("buildDate") or v.get("build") or b
-                                    if sub_v and sub_v != "Unknown":
-                                        firmware = f"{sub_v},build:{sub_b}" if sub_b else sub_v
+                        except Exception:
+                            pass
+
+                if firmware == "Unknown":
+                    for cfg_name in ("SoftwareVersion", "Version", "General"):
+                        try:
+                            res = await self.async_call_rpc("configManager.getConfig", {"name": cfg_name})
+                            if res.get("result"):
+                                table = res.get("params", {}).get("table", {})
+                                if isinstance(table, dict):
+                                    v = table.get("Version") or table.get("SoftwareVersion") or table.get("version")
+                                    b = table.get("BuildDate") or table.get("Build") or table.get("buildDate")
+                                    if v and v != "Unknown":
+                                        firmware = f"{v},build:{b}" if b else str(v)
                                         break
                         except Exception:
                             pass
@@ -1092,15 +1114,37 @@ class CPPlusClient:
             _LOGGER.error("Failed to reboot CP PLUS camera at %s: %s", self.host, err)
             return False
 
-    def get_stream_url(self, channel: int = 1, subtype: int = 0) -> str:
+    def get_stream_url(
+        self,
+        channel: int = 1,
+        subtype: int = 0,
+        stream_profile: str | None = None,
+    ) -> str:
         """Return the RTSP stream URL for the requested channel and stream type."""
         # Subtype 0 = Main Stream (HD), 1 = Sub Stream (SD)
-        username = urllib.parse.quote(self.username, safe="")
-        password = urllib.parse.quote(self.password, safe="")
-        return (
-            f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
-            f"/cam/realmonitor?channel={channel}&subtype={subtype}"
-        )
+        # Use safe RFC 3986 sub-delims so FFmpeg Digest Auth does not receive corrupted %XX password
+        username = urllib.parse.quote(self.username, safe="!$&'()*+,-._~")
+        password = urllib.parse.quote(self.password, safe="!$&'()*+,-._~")
+
+        profile = stream_profile or getattr(self, "stream_profile", None)
+        if not profile:
+            profile = STREAM_PROFILE_DAHUA_CH0 if self.device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
+
+        if profile == STREAM_PROFILE_ONVIF:
+            onvif_path = f"onvif{subtype + 1}"
+            return f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}/{onvif_path}"
+        elif profile == STREAM_PROFILE_LIVE:
+            return f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}/live"
+        elif profile == STREAM_PROFILE_DAHUA_CH0:
+            return (
+                f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"/cam/realmonitor?channel=0&subtype={subtype}"
+            )
+        else:
+            return (
+                f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"/cam/realmonitor?channel={channel}&subtype={subtype}"
+            )
 
     async def async_get_snapshot(self, channel: int = 1) -> bytes | None:
         """Fetch a snapshot JPEG image from camera or NVR using Digest authentication."""
