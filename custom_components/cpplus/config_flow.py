@@ -37,14 +37,58 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+from homeassistant.helpers import selector
+
+
+def build_channel_subentry_schema(
+    default_channel: int = 1,
+    default_name: str = "",
+    default_direct_host: str = "",
+    default_rtsp_port: int = DEFAULT_PORT_RTSP,
+    default_username: str = "",
+    default_password: str = "",
+    is_reconfigure: bool = False,
+) -> vol.Schema:
+    """Build unified schema for camera channel subentry."""
+    fields: dict[Any, Any] = {}
+    if not is_reconfigure:
+        fields[vol.Required("channel", default=default_channel)] = selector.NumberSelector(
+            selector.NumberSelectorConfig(min=1, max=32, step=1, mode=selector.NumberSelectorMode.BOX)
+        )
+    fields[vol.Optional("channel_name", default=default_name)] = selector.TextSelector()
+    fields[vol.Optional("direct_host", default=default_direct_host)] = selector.TextSelector()
+    fields[vol.Optional("direct_rtsp_port", default=default_rtsp_port)] = selector.NumberSelector(
+        selector.NumberSelectorConfig(min=1, max=65535, step=1, mode=selector.NumberSelectorMode.BOX)
+    )
+    fields[vol.Optional("direct_username", default=default_username)] = selector.TextSelector()
+    fields[vol.Optional("direct_password", default=default_password)] = selector.TextSelector(
+        selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+    )
+    return vol.Schema(fields)
+
+
+def build_device_schema() -> vol.Schema:
+    """Build device configuration schema using Home Assistant selectors."""
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST): selector.TextSelector(),
+            vol.Required(CONF_USERNAME, default="admin"): selector.TextSelector(),
+            vol.Optional(CONF_PASSWORD, default=""): selector.TextSelector(
+                selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(CONF_NAME, default=""): selector.TextSelector(),
+            vol.Optional(CONF_PORT, default=DEFAULT_PORT_HTTPS): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=65535, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+            vol.Optional(CONF_RTSP_PORT, default=DEFAULT_PORT_RTSP): selector.NumberSelector(
+                selector.NumberSelectorConfig(min=1, max=65535, step=1, mode=selector.NumberSelectorMode.BOX)
+            ),
+        }
+    )
+
+
 class CameraChannelSubentryFlowHandler(config_entries.ConfigSubentryFlow):
     """Handle camera channel subentry creation and modifications."""
-
-    def __init__(self) -> None:
-        """Initialize channel subentry flow."""
-        self._channel: int = 1
-        self._channel_name: str = ""
-        self._is_reconfigure: bool = False
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -54,7 +98,7 @@ class CameraChannelSubentryFlowHandler(config_entries.ConfigSubentryFlow):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            ch_num = user_input["channel"]
+            ch_num = int(user_input["channel"])
             ch_name = user_input.get("channel_name", "").strip() or f"Channel {ch_num}"
             existing_channels = {
                 s.data.get("channel")
@@ -63,12 +107,11 @@ class CameraChannelSubentryFlowHandler(config_entries.ConfigSubentryFlow):
             if ch_num in existing_channels:
                 errors["channel"] = "channel_exists"
             else:
-                self._channel = ch_num
-                self._channel_name = ch_name
-                self._is_reconfigure = False
-
-                if user_input.get("direct_connection", False):
-                    return await self.async_step_direct_camera()
+                direct_host = user_input.get("direct_host", "").strip()
+                direct_conn = bool(direct_host)
+                direct_rtsp = int(user_input.get("direct_rtsp_port") or DEFAULT_PORT_RTSP)
+                direct_user = user_input.get("direct_username", "").strip() or None
+                direct_pass = user_input.get("direct_password", "").strip() or None
 
                 return self.async_create_entry(
                     title=ch_name,
@@ -79,140 +122,69 @@ class CameraChannelSubentryFlowHandler(config_entries.ConfigSubentryFlow):
                         "is_native_cpplus": True,
                         "has_smd": True,
                         "has_tripwire": False,
-                        "direct_connection": False,
+                        "direct_connection": direct_conn,
+                        "direct_host": direct_host if direct_conn else None,
+                        "direct_rtsp_port": direct_rtsp,
+                        "direct_username": direct_user,
+                        "direct_password": direct_pass,
                     },
                 )
 
-        schema = vol.Schema(
-            {
-                vol.Required("channel", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=32)),
-                vol.Optional("channel_name", default=""): str,
-                vol.Optional("direct_connection", default=False): bool,
-            }
-        )
+        existing_channels = {
+            s.data.get("channel")
+            for s in config_entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+        }
+        next_ch = next((c for c in range(1, 33) if c not in existing_channels), 1)
 
         return self.async_show_form(
             step_id="user",
-            data_schema=schema,
+            data_schema=build_channel_subentry_schema(default_channel=next_ch),
             errors=errors,
         )
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle reconfiguring a channel name and direct connection."""
+        """Handle reconfiguring a channel name and stream options."""
+        config_entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
         current_name = subentry.title or subentry.data.get("name", "")
-        current_direct = subentry.data.get("direct_connection", False)
+        current_data = dict(subentry.data)
 
         if user_input is not None:
             new_name = user_input.get("channel_name", "").strip() or current_name
-            self._channel = subentry.data.get("channel", 1)
-            self._channel_name = new_name
-            self._is_reconfigure = True
-
-            if user_input.get("direct_connection", False):
-                return await self.async_step_direct_camera()
+            direct_host = user_input.get("direct_host", "").strip()
+            direct_conn = bool(direct_host)
+            direct_rtsp = int(user_input.get("direct_rtsp_port") or DEFAULT_PORT_RTSP)
+            direct_user = user_input.get("direct_username", "").strip() or None
+            direct_pass = user_input.get("direct_password", "").strip() or None
 
             return self.async_update_and_abort(
-                self._get_entry(),
+                config_entry,
                 subentry,
                 title=new_name,
                 data={
                     **subentry.data,
                     "name": new_name,
-                    "direct_connection": False,
+                    "direct_connection": direct_conn,
+                    "direct_host": direct_host if direct_conn else None,
+                    "direct_rtsp_port": direct_rtsp,
+                    "direct_username": direct_user,
+                    "direct_password": direct_pass,
                 },
             )
 
-        schema = vol.Schema(
-            {
-                vol.Required("channel_name", default=current_name): str,
-                vol.Optional("direct_connection", default=current_direct): bool,
-            }
-        )
-
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=schema,
+            data_schema=build_channel_subentry_schema(
+                default_name=current_name,
+                default_direct_host=current_data.get("direct_host") or "",
+                default_rtsp_port=current_data.get("direct_rtsp_port", DEFAULT_PORT_RTSP),
+                default_username=current_data.get("direct_username") or "",
+                default_password=current_data.get("direct_password") or "",
+                is_reconfigure=True,
+            ),
             description_placeholders={"channel": str(subentry.data.get("channel", ""))},
-        )
-
-    async def async_step_direct_camera(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Configure direct camera IP address and stream parameters."""
-        config_entry = self._get_entry()
-        errors: dict[str, str] = {}
-
-        existing_subentry = self._get_reconfigure_subentry() if self._is_reconfigure else None
-        current_data = dict(existing_subentry.data) if existing_subentry else {}
-
-        default_host = current_data.get("direct_host") or current_data.get("address") or ""
-        default_rtsp = current_data.get("direct_rtsp_port", DEFAULT_PORT_RTSP)
-        default_use_nvr = current_data.get("use_nvr_credentials", True)
-        default_user = current_data.get("direct_username", "")
-        default_pass = current_data.get("direct_password", "")
-
-        if user_input is not None:
-            direct_host = user_input.get("direct_host", "").strip()
-            if not direct_host:
-                errors["direct_host"] = "invalid_host"
-            else:
-                use_nvr = user_input.get("use_nvr_credentials", True)
-                direct_user = "" if use_nvr else user_input.get("direct_username", "").strip()
-                direct_pass = "" if use_nvr else user_input.get("direct_password", "").strip()
-                direct_rtsp_port = user_input.get("direct_rtsp_port", DEFAULT_PORT_RTSP)
-
-                if self._is_reconfigure and existing_subentry:
-                    return self.async_update_and_abort(
-                        config_entry,
-                        existing_subentry,
-                        title=self._channel_name or existing_subentry.title,
-                        data={
-                            **existing_subentry.data,
-                            "name": self._channel_name or existing_subentry.title,
-                            "direct_connection": True,
-                            "direct_host": direct_host,
-                            "direct_rtsp_port": direct_rtsp_port,
-                            "use_nvr_credentials": use_nvr,
-                            "direct_username": direct_user,
-                            "direct_password": direct_pass,
-                        },
-                    )
-
-                return self.async_create_entry(
-                    title=self._channel_name,
-                    data={
-                        "channel": self._channel,
-                        "channel_index": self._channel - 1,
-                        "name": self._channel_name,
-                        "is_native_cpplus": True,
-                        "has_smd": True,
-                        "has_tripwire": False,
-                        "direct_connection": True,
-                        "direct_host": direct_host,
-                        "direct_rtsp_port": direct_rtsp_port,
-                        "use_nvr_credentials": use_nvr,
-                        "direct_username": direct_user,
-                        "direct_password": direct_pass,
-                    },
-                )
-
-        schema = vol.Schema(
-            {
-                vol.Required("direct_host", default=default_host): str,
-                vol.Optional("direct_rtsp_port", default=default_rtsp): int,
-                vol.Required("use_nvr_credentials", default=default_use_nvr): bool,
-                vol.Optional("direct_username", default=default_user): str,
-                vol.Optional("direct_password", default=default_pass): str,
-            }
-        )
-
-        return self.async_show_form(
-            step_id="direct_camera",
-            data_schema=schema,
-            errors=errors,
         )
 
 
@@ -242,20 +214,25 @@ class CPPlusOptionsFlowHandler(config_entries.OptionsFlow):
 
         schema = vol.Schema(
             {
-                vol.Optional(CONF_RTSP_PORT, default=current_rtsp): int,
+                vol.Optional(CONF_RTSP_PORT, default=current_rtsp): selector.NumberSelector(
+                    selector.NumberSelectorConfig(min=1, max=65535, step=1, mode=selector.NumberSelectorMode.BOX)
+                ),
                 vol.Optional(
                     CONF_STREAM_PROFILE,
                     default=current_profile,
-                ): vol.In(
-                    {
-                        STREAM_PROFILE_DAHUA_CH1: "Dahua Channel 1-32 (/cam/realmonitor?channel=X)",
-                        STREAM_PROFILE_DAHUA_CH0: "Dahua Channel 0 (/cam/realmonitor?channel=0)",
-                        STREAM_PROFILE_VIDEO_LIVE: "CP PLUS Native (/video/live)",
-                        STREAM_PROFILE_ONVIF: "ONVIF Native (/onvif1, /onvif2)",
-                        STREAM_PROFILE_LIVE: "Live Direct (/live)",
-                    }
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH1, label="Dahua Channel 1-32 (/cam/realmonitor?channel=X)"),
+                            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH0, label="Dahua Channel 0 (/cam/realmonitor?channel=0)"),
+                            selector.SelectOptionDict(value=STREAM_PROFILE_VIDEO_LIVE, label="CP PLUS Native (/video/live)"),
+                            selector.SelectOptionDict(value=STREAM_PROFILE_ONVIF, label="ONVIF Native (/onvif1, /onvif2)"),
+                            selector.SelectOptionDict(value=STREAM_PROFILE_LIVE, label="Live Direct (/live)"),
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
                 ),
-                vol.Optional(CONF_RTSP_OVER_TLS, default=current_tls): bool,
+                vol.Optional(CONF_RTSP_OVER_TLS, default=current_tls): selector.BooleanSelector(),
             }
         )
 
@@ -295,17 +272,37 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Handle the initial setup step."""
+        """Step 1: Choose setup mode (NVR vs Standalone Camera)."""
+        return self.async_show_menu(
+            step_id="user",
+            menu_options=["nvr", "camera"],
+        )
+
+    async def async_step_nvr(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle NVR setup."""
+        return await self._async_handle_device_step("nvr", TYPE_NVR, user_input)
+
+    async def async_step_camera(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Handle standalone IP camera setup."""
+        return await self._async_handle_device_step("camera", TYPE_CAMERA, user_input)
+
+    async def _async_handle_device_step(
+        self, step_id: str, device_type: str, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Shared logic to authenticate, query hardware metadata, and create entry."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
-            port = user_input.get(CONF_PORT, DEFAULT_PORT_HTTPS)
-            rtsp_port = user_input.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP)
+            port = int(user_input.get(CONF_PORT, DEFAULT_PORT_HTTPS))
+            rtsp_port = int(user_input.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP))
             username = user_input[CONF_USERNAME].strip()
             password = user_input.get(CONF_PASSWORD, "")
             name = user_input.get(CONF_NAME, "").strip() or host
-            selected_device_type = user_input.get(CONF_DEVICE_TYPE, TYPE_NVR)
 
             client = CPPlusClient(
                 hass=self.hass,
@@ -314,7 +311,7 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 rtsp_port=rtsp_port,
                 username=username,
                 password=password,
-                device_type=selected_device_type,
+                device_type=device_type,
             )
 
             try:
@@ -323,7 +320,6 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if not serial:
                     raise CPPlusError(f"No serial number returned from device at {host}")
                 model = device_info.get("hardware", "STQC")
-                device_type = selected_device_type
 
                 await self.async_set_unique_id(serial)
                 self._abort_if_unique_id_configured()
@@ -359,6 +355,9 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (CPPlusConnectionError, ConnectionError) as err:
                 _LOGGER.warning("Connection error configuring CP PLUS %s: %s", host, err)
                 errors["base"] = "invalid_auth" if "Authentication failed" in str(err) else "cannot_connect"
+            except CPPlusError as err:
+                _LOGGER.warning("Device error configuring CP PLUS %s: %s", host, err)
+                errors["base"] = "cannot_connect"
             except config_entries.AbortFlow:
                 raise
             except Exception as err:
@@ -367,26 +366,9 @@ class CPPlusConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             finally:
                 await client.async_close()
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_HOST): str,
-                vol.Required(CONF_USERNAME, default="admin"): str,
-                vol.Optional(CONF_PASSWORD, default=""): str,
-                vol.Optional(CONF_NAME, default=""): str,
-                vol.Required(CONF_DEVICE_TYPE, default=TYPE_NVR): vol.In(
-                    {
-                        TYPE_NVR: "NVR / DVR Hub (Multi-channel)",
-                        TYPE_CAMERA: "Standalone IP Camera (Single stream)",
-                    }
-                ),
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT_HTTPS): int,
-                vol.Optional(CONF_RTSP_PORT, default=DEFAULT_PORT_RTSP): int,
-            }
-        )
-
         return self.async_show_form(
-            step_id="user",
-            data_schema=schema,
+            step_id=step_id,
+            data_schema=build_device_schema(),
             errors=errors,
         )
 

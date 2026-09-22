@@ -2,16 +2,39 @@
   "config": {
     "step": {
       "user": {
-        "title": "Add CP PLUS STQC Device",
-        "description": "Enter the connection details for your CP PLUS camera or NVR.",
+        "title": "Select Setup Mode",
+        "description": "Choose how you want to configure your CP PLUS devices.",
+        "menu_options": {
+          "nvr": "CP PLUS 4K NVR / DVR Hub (Multi-channel)",
+          "camera": "CP PLUS Standalone IP Camera (Single)"
+        },
+        "menu_option_descriptions": {
+          "nvr": "Connect an NVR or DVR hub to monitor multiple camera channels and local storage.",
+          "camera": "Connect directly to a standalone CP PLUS STQC IP camera."
+        }
+      },
+      "nvr": {
+        "title": "Add CP PLUS STQC NVR / DVR Hub",
+        "description": "Enter the connection details for your CP PLUS NVR or DVR hub.",
         "data": {
-          "host": "IP Address",
+          "host": "IP Address or Hostname",
           "username": "Username",
           "password": "Password",
-          "name": "Device Name",
-          "device_type": "Device Type",
-          "port": "HTTPS Port (Default: 443)",
-          "rtsp_port": "RTSP Port (Default: 554)"
+          "name": "NVR Name (Optional)",
+          "port": "HTTPS Port",
+          "rtsp_port": "RTSP Port"
+        }
+      },
+      "camera": {
+        "title": "Add CP PLUS STQC Standalone Camera",
+        "description": "Enter the connection details for your standalone CP PLUS IP camera.",
+        "data": {
+          "host": "IP Address or Hostname",
+          "username": "Username",
+          "password": "Password",
+          "name": "Camera Name (Optional)",
+          "port": "HTTPS Port",
+          "rtsp_port": "RTSP Port"
         }
       },
       "reauth_confirm": {
@@ -25,7 +48,7 @@
         "title": "Reconfigure CP PLUS Device",
         "description": "Update connection settings or credentials for your device.",
         "data": {
-          "host": "IP Address",
+          "host": "IP Address or Hostname",
           "username": "Username",
           "password": "Password",
           "port": "HTTPS Port",
@@ -36,7 +59,7 @@
     "error": {
       "cannot_connect": "Failed to connect to the CP PLUS device. Check IP and port.",
       "invalid_auth": "Invalid username or password.",
-      "unknown": "An unexpected error occurred."
+      "unknown": "An unexpected error occurred communicating with the device."
     },
     "abort": {
       "already_configured": "This CP PLUS device is already configured.",
@@ -57,8 +80,12 @@
       }
     }
   },
-  "subentries": {
+  "config_subentries": {
     "channel": {
+      "entry_type": "Camera Channel",
+      "initiate_flow": {
+        "user": "Add camera channel"
+      },
       "step": {
         "user": {
           "title": "Add Camera Channel",
@@ -66,7 +93,10 @@
           "data": {
             "channel": "Channel Number (1-32)",
             "channel_name": "Channel Name",
-            "direct_connection": "Direct Camera Connection (Bypass NVR for streaming)"
+            "direct_host": "Camera IP / Hostname (Optional - Direct Stream)",
+            "direct_rtsp_port": "Direct RTSP Port (Default: 554)",
+            "direct_username": "Custom Username (Optional)",
+            "direct_password": "Custom Password (Optional)"
           }
         },
         "reconfigure": {
@@ -74,16 +104,8 @@
           "description": "Edit configuration for Channel {channel}.",
           "data": {
             "channel_name": "Channel Name",
-            "direct_connection": "Direct Camera Connection (Bypass NVR for streaming)"
-          }
-        },
-        "direct_camera": {
-          "title": "Direct Camera Connection",
-          "description": "Configure direct RTSP stream connection to the camera hardware.",
-          "data": {
-            "direct_host": "Camera IP / Hostname",
-            "direct_rtsp_port": "RTSP Port (Default: 554)",
-            "use_nvr_credentials": "Use NVR Credentials",
+            "direct_host": "Camera IP / Hostname (Optional - Direct Stream)",
+            "direct_rtsp_port": "Direct RTSP Port (Default: 554)",
             "direct_username": "Custom Username (Optional)",
             "direct_password": "Custom Password (Optional)"
           }

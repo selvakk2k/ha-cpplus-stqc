@@ -101,7 +101,7 @@ class CPPlusClient:
         rtsp_port: int = 554,
         username: str = "admin",
         password: str = "",
-        device_type: str = TYPE_CAMERA,
+        device_type: str | None = None,
         session: aiohttp.ClientSession | None = None,
         use_ssl: bool = True,
         stream_profile: str | None = None,
@@ -709,7 +709,7 @@ class CPPlusClient:
 
     async def async_get_device_info(self) -> dict[str, Any]:
         """Fetch device model, machine name, and serial number."""
-        if not self.device_type or self.device_type == TYPE_CAMERA:
+        if not self.device_type:
             await self.async_detect_device_type()
 
         if self.device_type == TYPE_NVR:
@@ -787,6 +787,25 @@ class CPPlusClient:
             raise
         except Exception:
             pass
+
+        if not serial:
+            try:
+                res = await self.async_call_rpc("magicBox.getSystemInfo")
+                if res.get("result"):
+                    params = res.get("params", {})
+                    info = params.get("info", params)
+                    serial = info.get("SerialNo") or info.get("serialNumber") or info.get("Serial") or ""
+            except Exception:
+                pass
+
+        if not serial:
+            try:
+                sys_res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=getSystemInfo")
+                for line in sys_res.splitlines():
+                    if line.startswith("serialNumber="):
+                        serial = line.split("=", 1)[1].strip()
+            except Exception:
+                pass
 
         if not serial:
             raise CPPlusError(f"Failed to retrieve serial number from camera at {self.host}")

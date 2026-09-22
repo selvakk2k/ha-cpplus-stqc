@@ -64,7 +64,7 @@ async def test_stream_url_encoding_with_special_characters():
 
 @pytest.mark.asyncio
 async def test_config_flow_nvr_setup(hass: HomeAssistant, enable_custom_integrations):
-    """Test standard NVR user setup flow."""
+    """Test standard NVR user setup flow via menu selection."""
     with patch("custom_components.cpplus.config_flow.CPPlusClient") as mock_client_cls, \
          patch("custom_components.cpplus.async_setup_entry", return_value=True):
         mock_instance = AsyncMock()
@@ -79,11 +79,18 @@ async def test_config_flow_nvr_setup(hass: HomeAssistant, enable_custom_integrat
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        assert result["type"] is FlowResultType.FORM
+        assert result["type"] is FlowResultType.MENU
         assert result["step_id"] == "user"
 
-        result2 = await hass.config_entries.flow.async_configure(
+        result_nvr = await hass.config_entries.flow.async_configure(
             result["flow_id"],
+            {"next_step_id": "nvr"},
+        )
+        assert result_nvr["type"] is FlowResultType.FORM
+        assert result_nvr["step_id"] == "nvr"
+
+        result2 = await hass.config_entries.flow.async_configure(
+            result_nvr["flow_id"],
             {
                 CONF_HOST: "10.0.29.200",
                 CONF_USERNAME: "admin",
@@ -101,7 +108,7 @@ async def test_config_flow_nvr_setup(hass: HomeAssistant, enable_custom_integrat
 
 @pytest.mark.asyncio
 async def test_config_flow_standalone_camera_setup(hass: HomeAssistant, enable_custom_integrations):
-    """Test standalone camera user setup flow with selector."""
+    """Test standalone camera user setup flow via menu selection."""
     with patch("custom_components.cpplus.config_flow.CPPlusClient") as mock_client_cls, \
          patch("custom_components.cpplus.async_setup_entry", return_value=True):
         mock_instance = AsyncMock()
@@ -116,17 +123,23 @@ async def test_config_flow_standalone_camera_setup(hass: HomeAssistant, enable_c
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
         )
-        assert result["type"] is FlowResultType.FORM
+        assert result["type"] is FlowResultType.MENU
         assert result["step_id"] == "user"
 
-        result2 = await hass.config_entries.flow.async_configure(
+        result_cam = await hass.config_entries.flow.async_configure(
             result["flow_id"],
+            {"next_step_id": "camera"},
+        )
+        assert result_cam["type"] is FlowResultType.FORM
+        assert result_cam["step_id"] == "camera"
+
+        result2 = await hass.config_entries.flow.async_configure(
+            result_cam["flow_id"],
             {
                 CONF_HOST: "10.0.29.212",
                 CONF_USERNAME: "admin",
                 CONF_PASSWORD: "secret_password",
                 CONF_NAME: "Living Room Camera",
-                CONF_DEVICE_TYPE: TYPE_CAMERA,
                 CONF_PORT: 443,
                 CONF_RTSP_PORT: 554,
             },
@@ -255,31 +268,20 @@ async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enabl
     assert res["type"] is FlowResultType.FORM
     assert res["step_id"] == "user"
 
-    # Submit with direct connection enabled
+    # Submit with direct connection parameters in single unified form
     res2 = await hass.config_entries.subentries.async_configure(
         res["flow_id"],
         {
             "channel": 18,
             "channel_name": "Gate Intercom",
-            "direct_connection": True,
-        },
-    )
-    assert res2["type"] is FlowResultType.FORM
-    assert res2["step_id"] == "direct_camera"
-
-    # Submit direct camera IP and parameters
-    res3 = await hass.config_entries.subentries.async_configure(
-        res2["flow_id"],
-        {
             "direct_host": "10.0.29.215",
             "direct_rtsp_port": 554,
-            "use_nvr_credentials": True,
         },
     )
-    assert res3["type"] is FlowResultType.CREATE_ENTRY
-    assert res3["title"] == "Gate Intercom"
-    assert res3["data"]["direct_connection"] is True
-    assert res3["data"]["direct_host"] == "10.0.29.215"
+    assert res2["type"] is FlowResultType.CREATE_ENTRY
+    assert res2["title"] == "Gate Intercom"
+    assert res2["data"]["direct_connection"] is True
+    assert res2["data"]["direct_host"] == "10.0.29.215"
 
     # Verify direct camera stream source
     client = CPPlusClient(
@@ -299,11 +301,50 @@ async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enabl
         subtype=0,
         stream_label="Main",
         channel_name="Gate Intercom",
-        subentry_data=res3["data"],
+        subentry_data=res2["data"],
     )
     url = await cam.stream_source()
     assert url == "rtsp://admin:secret_password@10.0.29.215:554/cam/realmonitor?channel=1&subtype=0"
     assert cam.extra_state_attributes["connection_mode"] == "direct"
     assert cam.extra_state_attributes["direct_host"] == "10.0.29.215"
+
+
+@pytest.mark.asyncio
+async def test_subentry_add_standard_channel(hass: HomeAssistant, enable_custom_integrations):
+    """Test adding a standard channel subentry without direct host."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="CP PLUS NVR",
+        data={
+            CONF_HOST: "10.0.29.200",
+            CONF_USERNAME: "admin",
+            CONF_PASSWORD: "password",
+            "device_type": TYPE_NVR,
+        },
+        unique_id="NVR_SERIAL_TEST_123",
+    )
+    entry.add_to_hass(hass)
+
+    res = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_CHANNEL),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    assert res["type"] is FlowResultType.FORM
+    assert res["step_id"] == "user"
+
+    res2 = await hass.config_entries.subentries.async_configure(
+        res["flow_id"],
+        {
+            "channel": 5,
+            "channel_name": "Driveway Camera",
+        },
+    )
+    assert res2["type"] is FlowResultType.CREATE_ENTRY
+    assert res2["title"] == "Driveway Camera"
+    assert res2["data"]["direct_connection"] is False
+    assert res2["data"]["channel"] == 5
+
 
 
