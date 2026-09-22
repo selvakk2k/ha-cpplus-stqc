@@ -11,7 +11,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, SUBENTRY_TYPE_CHANNEL, TYPE_NVR
+from .const import DOMAIN, LEGACY_SUBENTRY_TYPE_CHANNEL, SUBENTRY_TYPE_CHANNEL, TYPE_NVR
 from .coordinator import CPPlusDataUpdateCoordinator
 
 
@@ -29,6 +29,9 @@ async def async_setup_entry(
             for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
             if "channel" in s.data
         }
+        for s in entry.get_subentries_of_type(LEGACY_SUBENTRY_TYPE_CHANNEL):
+            if "channel" in s.data and int(s.data["channel"]) not in subentries:
+                subentries[int(s.data["channel"])] = s
         all_channels = sorted(set(subentries.keys()) | {c["channel"] for c in coordinator.channels})
         for ch_num in all_channels:
             ch = next((c for c in coordinator.channels if c.get("channel") == ch_num), {"channel": ch_num, "index": ch_num - 1, "name": f"Channel {ch_num}", "is_native_cpplus": True, "has_smd": True, "has_tripwire": False})

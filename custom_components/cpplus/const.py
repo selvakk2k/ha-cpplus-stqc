@@ -60,8 +60,10 @@ PTZ_COMMANDS: dict[str, str] = {
     "focus_far": "FocusFar",
 }
 
-SUBENTRY_TYPE_HUB = "hub"
-SUBENTRY_TYPE_CHANNEL = "channel"
+SUBENTRY_TYPE_HUB = "nvr_hub"
+SUBENTRY_TYPE_CHANNEL = "camera_channel"
+LEGACY_SUBENTRY_TYPE_CHANNEL = "channel"
+LEGACY_SUBENTRY_TYPE_HUB = "hub"
 
 CONF_STREAM_PROFILE = "stream_profile"
 CONF_RTSP_OVER_TLS = "rtsp_over_tls"

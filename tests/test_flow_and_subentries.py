@@ -128,10 +128,10 @@ async def test_config_flow_standalone_camera_setup(hass: HomeAssistant, enable_c
 
         result_cam = await hass.config_entries.flow.async_configure(
             result["flow_id"],
-            {"next_step_id": "camera"},
+            {"next_step_id": "standalone"},
         )
         assert result_cam["type"] is FlowResultType.FORM
-        assert result_cam["step_id"] == "camera"
+        assert result_cam["step_id"] == "standalone"
 
         result2 = await hass.config_entries.flow.async_configure(
             result_cam["flow_id"],
@@ -197,7 +197,7 @@ async def test_subentry_channel_reconfigure(hass: HomeAssistant, enable_custom_i
     # Submit updated name
     res2 = await hass.config_entries.subentries.async_configure(
         res["flow_id"],
-        {"channel_name": "Main Gate Intercom"},
+        {"name": "Main Gate Intercom", "direct_connection": False},
     )
     assert res2["type"] is FlowResultType.ABORT
     assert res2["reason"] == "reconfigure_successful"
@@ -241,7 +241,7 @@ async def test_options_flow(hass: HomeAssistant, enable_custom_integrations):
 
 @pytest.mark.asyncio
 async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enable_custom_integrations):
-    """Test adding a channel subentry with direct camera connection."""
+    """Test adding a channel subentry and configuring direct camera connection via reconfigure."""
     from custom_components.cpplus.config_flow import CameraChannelSubentryFlowHandler
     from custom_components.cpplus.camera import CPPlusCamera
     from custom_components.cpplus.coordinator import CPPlusDataUpdateCoordinator
@@ -260,7 +260,7 @@ async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enabl
     )
     entry.add_to_hass(hass)
 
-    # Add channel subentry via user step
+    # Add channel subentry via user step (clean channel + name)
     res = await hass.config_entries.subentries.async_init(
         (entry.entry_id, SUBENTRY_TYPE_CHANNEL),
         context={"source": config_entries.SOURCE_USER},
@@ -268,20 +268,54 @@ async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enabl
     assert res["type"] is FlowResultType.FORM
     assert res["step_id"] == "user"
 
-    # Submit with direct connection parameters in single unified form
     res2 = await hass.config_entries.subentries.async_configure(
         res["flow_id"],
         {
-            "channel": 18,
-            "channel_name": "Gate Intercom",
-            "direct_host": "10.0.29.215",
-            "direct_rtsp_port": 554,
+            "channel": "18",
+            "name": "Gate Intercom",
         },
     )
     assert res2["type"] is FlowResultType.CREATE_ENTRY
     assert res2["title"] == "Gate Intercom"
-    assert res2["data"]["direct_connection"] is True
-    assert res2["data"]["direct_host"] == "10.0.29.215"
+    assert res2["data"]["channel"] == 18
+    assert res2["data"]["direct_connection"] is False
+
+    created_subentry = next(s for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL) if s.data["channel"] == 18)
+
+    # Reconfigure the created subentry to enable direct connection
+    res_reconf = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_CHANNEL),
+        context={
+            "source": config_entries.SOURCE_RECONFIGURE,
+            "subentry_id": created_subentry.subentry_id,
+        },
+    )
+    assert res_reconf["type"] is FlowResultType.FORM
+    assert res_reconf["step_id"] == "reconfigure"
+
+    res_direct = await hass.config_entries.subentries.async_configure(
+        res_reconf["flow_id"],
+        {
+            "name": "Gate Intercom",
+            "direct_connection": True,
+        },
+    )
+    assert res_direct["type"] is FlowResultType.FORM
+    assert res_direct["step_id"] == "direct_camera"
+
+    res_saved = await hass.config_entries.subentries.async_configure(
+        res_direct["flow_id"],
+        {
+            "direct_host": "10.0.29.215",
+            "direct_rtsp_port": 554,
+            "direct_http_port": 80,
+            "use_nvr_credentials": True,
+        },
+    )
+    assert res_saved["type"] is FlowResultType.ABORT
+    assert res_saved["reason"] == "reconfigure_successful"
+    assert created_subentry.data["direct_connection"] is True
+    assert created_subentry.data["direct_host"] == "10.0.29.215"
 
     # Verify direct camera stream source
     client = CPPlusClient(
@@ -301,7 +335,7 @@ async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enabl
         subtype=0,
         stream_label="Main",
         channel_name="Gate Intercom",
-        subentry_data=res2["data"],
+        subentry_data=created_subentry.data,
     )
     url = await cam.stream_source()
     assert url == "rtsp://admin:secret_password@10.0.29.215:554/cam/realmonitor?channel=1&subtype=0"
@@ -337,14 +371,15 @@ async def test_subentry_add_standard_channel(hass: HomeAssistant, enable_custom_
     res2 = await hass.config_entries.subentries.async_configure(
         res["flow_id"],
         {
-            "channel": 5,
-            "channel_name": "Driveway Camera",
+            "channel": "5",
+            "name": "Driveway Camera",
         },
     )
     assert res2["type"] is FlowResultType.CREATE_ENTRY
     assert res2["title"] == "Driveway Camera"
     assert res2["data"]["direct_connection"] is False
     assert res2["data"]["channel"] == 5
+    assert res2["data"]["is_native_cpplus"] is True
 
 
 

@@ -28,6 +28,7 @@ from .const import (
     CONF_STREAM_PROFILE,
     CONF_RTSP_OVER_TLS,
     SUBENTRY_TYPE_CHANNEL,
+    LEGACY_SUBENTRY_TYPE_CHANNEL,
     SUBENTRY_TYPE_HUB,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
@@ -253,6 +254,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 s.unique_id: s
                 for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
             }
+            for s in entry.get_subentries_of_type(LEGACY_SUBENTRY_TYPE_CHANNEL):
+                existing_subentries[s.unique_id] = s
             for ch in coordinator.channels:
                 ch_uid = f"{serial}_ch{ch['channel']}"
                 if ch_uid not in existing_subentries:
@@ -302,6 +305,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             s.unique_id: s
             for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
         }
+        for s in entry.get_subentries_of_type(LEGACY_SUBENTRY_TYPE_CHANNEL):
+            subentries_by_uid[s.unique_id] = s
         for ch in coordinator.channels:
             ch_uid = f"{serial}_ch{ch['channel']}"
             subentry = subentries_by_uid.get(ch_uid)
