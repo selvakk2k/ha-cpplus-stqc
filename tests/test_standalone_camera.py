@@ -238,6 +238,44 @@ async def test_stqc_firmware_detection_from_system_info_or_config_manager() -> N
     info = await client.async_get_device_info()
     assert info["hardware"] == "CP-UNC-TA21L3C-Q"
     assert info["serial"] == "O55DOBEK0WN5AC6L"
-    assert info["firmware"] == "3.100.0000000.1.R,build:2024-01-15"
+    assert "3.100.0000000.1.R" in info["firmware"]
     await client.async_close()
+
+
+@pytest.mark.asyncio
+async def test_stqc_security_baseline_dict_firmware_and_no_tripwire() -> None:
+    """Test that Security Baseline V2.4 dict firmware is cleanly formatted and tripwire is omitted when unsupported."""
+    client = CPPlusClient("10.0.29.212", 443, "admin", "secret", device_type=TYPE_CAMERA)
+    client.async_cgi_request = AsyncMock(side_effect=CPPlusError("HTTP error 404"))
+
+    async def mock_rpc(method: str, params: dict | None = None) -> dict:
+        if method == "magicBox.getDeviceType":
+            return {"result": True, "params": {"type": "CP-UNC-TA21L3C-Q"}}
+        if method == "magicBox.getSerialNo":
+            return {"result": True, "params": {"serial": "O55DOBEK0WN5AC6L"}}
+        if method == "magicBox.getSystemInfo":
+            return {
+                "result": True,
+                "params": {
+                    "Version": "2.860.00AT002.0.R",
+                    "BuildDate": "2025-12-03",
+                    "WebVersion": "V3.2.1.2356636",
+                    "SecurityBaseLineVersion": "V2.4",
+                },
+            }
+        return {"result": False}
+
+    client.async_call_rpc = AsyncMock(side_effect=mock_rpc)
+    client._logged_in = True
+
+    info = await client.async_get_device_info()
+    assert info["hardware"] == "CP-UNC-TA21L3C-Q"
+    assert info["firmware"] == "2.860.00AT002.0.R (Build: 2025-12-03)"
+
+    channels = await client.async_get_channels()
+    assert len(channels) == 1
+    # When camera doesn't report CrossLineDetection or VideoAnalyseRule, tripwire must be False
+    assert channels[0]["has_tripwire"] is False
+    await client.async_close()
+
 

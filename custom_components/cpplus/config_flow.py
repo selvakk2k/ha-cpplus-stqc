@@ -29,8 +29,10 @@ from .const import (
     CONF_NAME,
     CONF_DEVICE_TYPE,
     CONF_STREAM_PROFILE,
+    CONF_RTSP_OVER_TLS,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
+    STREAM_PROFILE_VIDEO_LIVE,
     STREAM_PROFILE_DAHUA_CH0,
     STREAM_PROFILE_DAHUA_CH1,
     STREAM_PROFILE_LIVE,
@@ -414,7 +416,14 @@ class CPPlusOptionsFlowHandler(config_entries.OptionsFlow):
             CONF_STREAM_PROFILE,
             self.config_entry.data.get(
                 CONF_STREAM_PROFILE,
-                STREAM_PROFILE_DAHUA_CH0 if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1,
+                STREAM_PROFILE_VIDEO_LIVE if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1,
+            ),
+        )
+        current_tls = self.config_entry.options.get(
+            CONF_RTSP_OVER_TLS,
+            self.config_entry.data.get(
+                CONF_RTSP_OVER_TLS,
+                True if device_type == TYPE_CAMERA else False,
             ),
         )
         current_rtsp_port = self.config_entry.options.get(
@@ -427,7 +436,8 @@ class CPPlusOptionsFlowHandler(config_entries.OptionsFlow):
         )
 
         stream_profiles = [
-            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH0, label="Dahua Realmonitor (Channel 0 - Single Camera Default)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_VIDEO_LIVE, label="CP PLUS STQC Native (/video/live?channel=1) [Default]"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH0, label="Dahua Realmonitor (Channel 0)"),
             selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH1, label="Dahua Realmonitor (Channel 1 - NVR Default)"),
             selector.SelectOptionDict(value=STREAM_PROFILE_ONVIF, label="ONVIF Profile S (/onvif1 Main, /onvif2 Sub)"),
             selector.SelectOptionDict(value=STREAM_PROFILE_LIVE, label="Live Stream (/live)"),
@@ -444,6 +454,10 @@ class CPPlusOptionsFlowHandler(config_entries.OptionsFlow):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Required(
+                    CONF_RTSP_OVER_TLS,
+                    default=current_tls,
+                ): bool,
                 vol.Required(
                     CONF_RTSP_PORT,
                     default=current_rtsp_port,

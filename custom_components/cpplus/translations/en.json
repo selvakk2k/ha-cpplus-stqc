@@ -118,6 +118,7 @@
         "description": "Adjust stream profile, RTSP streaming port, and HTTP/HTTPS connection port.",
         "data": {
           "stream_profile": "RTSP Stream Profile",
+          "rtsp_over_tls": "RTSP over TLS (RTSPS Encryption)",
           "rtsp_port": "RTSP Port (Default: 554)",
           "port": "HTTP / HTTPS Port (Default: 443, Camera Default: 80)"
         }

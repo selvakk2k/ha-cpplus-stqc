@@ -19,6 +19,7 @@ from .const import (
     STREAM_PROFILE_DAHUA_CH1,
     STREAM_PROFILE_LIVE,
     STREAM_PROFILE_ONVIF,
+    STREAM_PROFILE_VIDEO_LIVE,
     TYPE_CAMERA,
     TYPE_NVR,
 )
@@ -108,6 +109,7 @@ class CPPlusClient:
         session: aiohttp.ClientSession | None = None,
         use_ssl: bool = True,
         stream_profile: str | None = None,
+        rtsp_over_tls: bool | None = None,
     ) -> None:
         """Initialize the CP PLUS STQC client."""
         self.hass = hass
@@ -118,8 +120,9 @@ class CPPlusClient:
         self.password = password
         self.device_type = device_type
         self.use_ssl = use_ssl
+        self.rtsp_over_tls = rtsp_over_tls if rtsp_over_tls is not None else (use_ssl if device_type == TYPE_CAMERA else False)
         self.stream_profile = stream_profile or (
-            STREAM_PROFILE_DAHUA_CH0 if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
+            STREAM_PROFILE_VIDEO_LIVE if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
         )
         self._scheme = "https" if use_ssl else "http"
         self._external_session = session is not None
@@ -410,9 +413,11 @@ class CPPlusClient:
     async def async_get_channels(self) -> list[dict[str, Any]]:
         """Query NVR or standalone camera for channels, camera names, and AI detection capabilities."""
         if self.device_type == TYPE_CAMERA:
+            cgi_supported = False
             camera_name = self.host
             try:
                 title_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle")
+                cgi_supported = True
                 for line in title_res.splitlines():
                     m = re.match(r"table\.ChannelTitle\[0\]\.Name=(.*)", line.strip())
                     if m and m.group(1).strip():
@@ -423,6 +428,7 @@ class CPPlusClient:
             smd_info: dict[str, bool] = {}
             try:
                 smd_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=SmartMotionDetect")
+                cgi_supported = True
                 for line in smd_res.splitlines():
                     m_en = re.match(r"table\.SmartMotionDetect\[0\]\.Enable=(true|false)", line.strip(), re.I)
                     if m_en:
@@ -440,6 +446,7 @@ class CPPlusClient:
             has_tripwire = False
             try:
                 trip_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=CrossLineDetection")
+                cgi_supported = True
                 for line in trip_res.splitlines():
                     m_trip = re.match(r"table\.CrossLineDetection\[0\]\.Enable=(true|false)", line.strip(), re.I)
                     if m_trip:
@@ -451,6 +458,7 @@ class CPPlusClient:
             video_mode = 0
             try:
                 vim_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=VideoInMode")
+                cgi_supported = True
                 for line in vim_res.splitlines():
                     m_vim = re.match(r"table\.VideoInMode\[0\]\.Mode=(\d+)", line.strip())
                     if m_vim:
@@ -461,6 +469,7 @@ class CPPlusClient:
             lighting_mode = "Auto"
             try:
                 light_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=Lighting")
+                cgi_supported = True
                 for line in light_res.splitlines():
                     m_light = re.match(r"table\.Lighting\[0\]\[0\]\.Mode=([a-zA-Z0-9]+)", line.strip())
                     if m_light:
@@ -471,6 +480,7 @@ class CPPlusClient:
             audio_enable = True
             try:
                 enc_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=Encode")
+                cgi_supported = True
                 for line in enc_res.splitlines():
                     m_aud = re.match(
                         r"table\.Encode\[0\]\.MainFormat\[0\]\.(?:Audio\.Enable|AudioEnable)=(true|false)",
@@ -483,88 +493,108 @@ class CPPlusClient:
                 _LOGGER.debug("Could not query Encode on camera %s: %s", self.host, err)
 
             # JSON-RPC fallback for STQC standalone cameras where CGI endpoints are disabled
-            if not smd_info:
+            if not cgi_supported:
+                if not smd_info:
+                    try:
+                        res = await self.async_call_rpc("configManager.getConfig", {"name": "SmartMotionDetect"})
+                        if res.get("result"):
+                            table = res.get("params", {}).get("table", [])
+                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
+                            if "Enable" in item:
+                                smd_info["enable"] = bool(item["Enable"])
+                            obj = item.get("ObjectTypes", item)
+                            if "Human" in obj or "HumanDetection" in obj:
+                                smd_info["human"] = bool(obj.get("Human", obj.get("HumanDetection")))
+                            if "Vehicle" in obj or "VehicleDetection" in obj:
+                                smd_info["vehicle"] = bool(obj.get("Vehicle", obj.get("VehicleDetection")))
+                    except Exception as err:
+                        _LOGGER.debug("RPC query for SmartMotionDetect failed on %s: %s", self.host, err)
+
+                if not has_tripwire:
+                    try:
+                        res = await self.async_call_rpc("configManager.getConfig", {"name": "CrossLineDetection"})
+                        if res.get("result"):
+                            table = res.get("params", {}).get("table", [])
+                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
+                            if "Enable" in item:
+                                has_tripwire = True
+                                tripwire_enabled = bool(item["Enable"])
+                    except Exception as err:
+                        _LOGGER.debug("RPC query for CrossLineDetection failed on %s: %s", self.host, err)
+
+                if not has_tripwire:
+                    try:
+                        res = await self.async_call_rpc("configManager.getConfig", {"name": "VideoAnalyseRule"})
+                        if res.get("result"):
+                            table = res.get("params", {}).get("table", [])
+                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
+                            rules = item.get("Rules", item.get("Rule", [])) if isinstance(item, dict) else []
+                            if rules:
+                                has_tripwire = any(
+                                    r.get("RuleType") in ("CrossLine", "CrossRegion", "LineDetection")
+                                    for r in rules if isinstance(r, dict)
+                                )
+                                tripwire_enabled = any(
+                                    bool(r.get("Enable", True))
+                                    for r in rules if isinstance(r, dict) and r.get("RuleType") in ("CrossLine", "CrossRegion", "LineDetection")
+                                )
+                    except Exception as err:
+                        _LOGGER.debug("RPC query for VideoAnalyseRule failed on %s: %s", self.host, err)
+
+                if video_mode == 0:
+                    try:
+                        res = await self.async_call_rpc("configManager.getConfig", {"name": "VideoInMode"})
+                        if res.get("result"):
+                            table = res.get("params", {}).get("table", [])
+                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
+                            if "Mode" in item:
+                                video_mode = int(item["Mode"])
+                    except Exception as err:
+                        _LOGGER.debug("RPC query for VideoInMode failed on %s: %s", self.host, err)
+
+                if lighting_mode == "Auto":
+                    try:
+                        res = await self.async_call_rpc("configManager.getConfig", {"name": "Lighting"})
+                        if res.get("result"):
+                            table = res.get("params", {}).get("table", [])
+                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
+                            if isinstance(item, list) and item:
+                                item = item[0]
+                            if isinstance(item, dict) and "Mode" in item:
+                                lighting_mode = str(item["Mode"])
+                    except Exception as err:
+                        _LOGGER.debug("RPC query for Lighting failed on %s: %s", self.host, err)
+
                 try:
-                    res = await self.async_call_rpc("configManager.getConfig", {"name": "SmartMotionDetect"})
+                    res = await self.async_call_rpc("configManager.getConfig", {"name": "Encode"})
                     if res.get("result"):
                         table = res.get("params", {}).get("table", [])
                         item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                        if "Enable" in item:
-                            smd_info["enable"] = bool(item["Enable"])
-                        obj = item.get("ObjectTypes", item)
-                        if "Human" in obj or "HumanDetection" in obj:
-                            smd_info["human"] = bool(obj.get("Human", obj.get("HumanDetection")))
-                        if "Vehicle" in obj or "VehicleDetection" in obj:
-                            smd_info["vehicle"] = bool(obj.get("Vehicle", obj.get("VehicleDetection")))
+                        fmt = item.get("MainFormat", [{}])[0] if isinstance(item.get("MainFormat"), list) else {}
+                        if "AudioEnable" in fmt or "Audio" in fmt:
+                            audio_enable = bool(fmt.get("AudioEnable", fmt.get("Audio", {}).get("Enable", True)))
                 except Exception as err:
-                    _LOGGER.debug("RPC query for SmartMotionDetect failed on %s: %s", self.host, err)
+                    _LOGGER.debug("RPC query for Encode failed on %s: %s", self.host, err)
 
-            if not has_tripwire:
-                try:
-                    res = await self.async_call_rpc("configManager.getConfig", {"name": "CrossLineDetection"})
-                    if res.get("result"):
-                        table = res.get("params", {}).get("table", [])
-                        item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                        if "Enable" in item:
-                            has_tripwire = True
-                            tripwire_enabled = bool(item["Enable"])
-                except Exception as err:
-                    _LOGGER.debug("RPC query for CrossLineDetection failed on %s: %s", self.host, err)
-
-            if video_mode == 0:
-                try:
-                    res = await self.async_call_rpc("configManager.getConfig", {"name": "VideoInMode"})
-                    if res.get("result"):
-                        table = res.get("params", {}).get("table", [])
-                        item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                        if "Mode" in item:
-                            video_mode = int(item["Mode"])
-                except Exception as err:
-                    _LOGGER.debug("RPC query for VideoInMode failed on %s: %s", self.host, err)
-
-            if lighting_mode == "Auto":
-                try:
-                    res = await self.async_call_rpc("configManager.getConfig", {"name": "Lighting"})
-                    if res.get("result"):
-                        table = res.get("params", {}).get("table", [])
-                        item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                        if isinstance(item, list) and item:
-                            item = item[0]
-                        if isinstance(item, dict) and "Mode" in item:
-                            lighting_mode = str(item["Mode"])
-                except Exception as err:
-                    _LOGGER.debug("RPC query for Lighting failed on %s: %s", self.host, err)
-
-            try:
-                res = await self.async_call_rpc("configManager.getConfig", {"name": "Encode"})
-                if res.get("result"):
-                    table = res.get("params", {}).get("table", [])
-                    item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                    fmt = item.get("MainFormat", [{}])[0] if isinstance(item.get("MainFormat"), list) else {}
-                    if "AudioEnable" in fmt or "Audio" in fmt:
-                        audio_enable = bool(fmt.get("AudioEnable", fmt.get("Audio", {}).get("Enable", True)))
-            except Exception as err:
-                _LOGGER.debug("RPC query for Encode failed on %s: %s", self.host, err)
-
-            if camera_name == self.host:
-                try:
-                    res = await self.async_call_rpc("configManager.getConfig", {"name": "ChannelTitle"})
-                    if res.get("result"):
-                        table = res.get("params", {}).get("table", [])
-                        item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                        if "Name" in item and item["Name"]:
-                            camera_name = str(item["Name"])
-                except Exception as err:
-                    _LOGGER.debug("RPC query for ChannelTitle failed on %s: %s", self.host, err)
+                if camera_name == self.host:
+                    try:
+                        res = await self.async_call_rpc("configManager.getConfig", {"name": "ChannelTitle"})
+                        if res.get("result"):
+                            table = res.get("params", {}).get("table", [])
+                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
+                            if "Name" in item and item["Name"]:
+                                camera_name = str(item["Name"])
+                    except Exception as err:
+                        _LOGGER.debug("RPC query for ChannelTitle failed on %s: %s", self.host, err)
 
             model = self._device_info.get("hardware") or "CP-UNC-TA21L3C-Q"
             serial_no = self._device_info.get("serial") or ""
             firmware_ver = self._device_info.get("firmware") or ""
 
-            # Hardware capability profile fallback for CP PLUS TA21 / AI camera series
-            is_ai_cam = ("TA21" in model or "TA21L3C" in model)
-            has_smd = smd_info.get("enable", True if is_ai_cam else bool(smd_info))
-            has_tripwire = has_tripwire or is_ai_cam
+            # Hardware capability profile: honor actual detected capabilities
+            is_ai_cam = any(k in model.upper() for k in ("TA21", "AI", "SMD"))
+            has_smd = smd_info.get("enable", bool(smd_info))
+            has_tripwire = bool(has_tripwire)
 
             self._channels = [{
                 "index": 0,
@@ -581,8 +611,8 @@ class CPPlusClient:
                 "vendor": "CPPLUS",
                 "has_smd": has_smd,
                 "has_tripwire": has_tripwire,
-                "smd_human": smd_info.get("human", True if is_ai_cam else False),
-                "smd_vehicle": smd_info.get("vehicle", True if is_ai_cam else False),
+                "smd_human": smd_info.get("human", True if (has_smd and is_ai_cam) else False),
+                "smd_vehicle": smd_info.get("vehicle", True if (has_smd and is_ai_cam) else False),
                 "tripwire": tripwire_enabled,
                 "video_in_mode": video_mode,
                 "lighting_mode": lighting_mode,
@@ -1010,10 +1040,10 @@ class CPPlusClient:
                         if model == "CP PLUS STQC IPC":
                             model = info.get("deviceType") or info.get("type") or model
                         if firmware == "Unknown":
-                            v = info.get("appVersion") or info.get("softwareVersion") or info.get("version")
-                            b = info.get("buildDate") or info.get("build") or info.get("buildTime")
+                            v = info.get("appVersion") or info.get("softwareVersion") or info.get("version") or info.get("Version")
+                            b = info.get("buildDate") or info.get("build") or info.get("buildTime") or info.get("BuildDate")
                             if v and v != "Unknown":
-                                firmware = f"{v},build:{b}" if b else v
+                                firmware = f"{v} (Build: {b})" if b else str(v)
                 except Exception:
                     pass
 
@@ -1046,7 +1076,7 @@ class CPPlusClient:
                                         elif k_lower in ("builddate", "build", "buildtime") and val:
                                             b = str(val)
                                 if v:
-                                    firmware = f"{v},build:{b}" if b else v
+                                    firmware = f"{v} (Build: {b})" if b else str(v)
                                     break
                         except Exception:
                             pass
@@ -1061,10 +1091,26 @@ class CPPlusClient:
                                     v = table.get("Version") or table.get("SoftwareVersion") or table.get("version")
                                     b = table.get("BuildDate") or table.get("Build") or table.get("buildDate")
                                     if v and v != "Unknown":
-                                        firmware = f"{v},build:{b}" if b else str(v)
+                                        firmware = f"{v} (Build: {b})" if b else str(v)
                                         break
                         except Exception:
                             pass
+
+        # Cleanly format firmware string if raw dict or dict string was returned
+        if isinstance(firmware, dict):
+            ver = firmware.get("Version") or firmware.get("version") or firmware.get("softwareVersion") or "Unknown"
+            bdate = firmware.get("BuildDate") or firmware.get("buildDate") or firmware.get("build")
+            firmware = f"{ver} (Build: {bdate})" if bdate else str(ver)
+        elif isinstance(firmware, str) and ("Version" in firmware or "softwareVersion" in firmware) and "{" in firmware:
+            try:
+                import ast
+                parsed = ast.literal_eval(firmware)
+                if isinstance(parsed, dict):
+                    ver = parsed.get("Version") or parsed.get("version") or parsed.get("softwareVersion") or "Unknown"
+                    bdate = parsed.get("BuildDate") or parsed.get("buildDate") or parsed.get("build")
+                    firmware = f"{ver} (Build: {bdate})" if bdate else str(ver)
+            except Exception:
+                pass
 
         if not serial and fallback_serial and not fallback_serial.replace(".", "").isdigit():
             serial = fallback_serial
@@ -1119,8 +1165,9 @@ class CPPlusClient:
         channel: int = 1,
         subtype: int = 0,
         stream_profile: str | None = None,
+        use_tls: bool | None = None,
     ) -> str:
-        """Return the RTSP stream URL for the requested channel and stream type."""
+        """Return the RTSP / RTSPS stream URL for the requested channel and stream type."""
         # Subtype 0 = Main Stream (HD), 1 = Sub Stream (SD)
         # Use safe RFC 3986 sub-delims so FFmpeg Digest Auth does not receive corrupted %XX password
         username = urllib.parse.quote(self.username, safe="!$&'()*+,-._~")
@@ -1128,21 +1175,29 @@ class CPPlusClient:
 
         profile = stream_profile or getattr(self, "stream_profile", None)
         if not profile:
-            profile = STREAM_PROFILE_DAHUA_CH0 if self.device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
+            profile = STREAM_PROFILE_VIDEO_LIVE if self.device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
 
-        if profile == STREAM_PROFILE_ONVIF:
+        is_tls = use_tls if use_tls is not None else getattr(self, "rtsp_over_tls", False)
+        scheme = "rtsps" if is_tls else "rtsp"
+
+        if profile == STREAM_PROFILE_VIDEO_LIVE:
+            return (
+                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"/video/live?channel={channel}&subtype={subtype}"
+            )
+        elif profile == STREAM_PROFILE_ONVIF:
             onvif_path = f"onvif{subtype + 1}"
-            return f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}/{onvif_path}"
+            return f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}/{onvif_path}"
         elif profile == STREAM_PROFILE_LIVE:
-            return f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}/live"
+            return f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}/live"
         elif profile == STREAM_PROFILE_DAHUA_CH0:
             return (
-                f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
                 f"/cam/realmonitor?channel=0&subtype={subtype}"
             )
         else:
             return (
-                f"rtsp://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
                 f"/cam/realmonitor?channel={channel}&subtype={subtype}"
             )
 

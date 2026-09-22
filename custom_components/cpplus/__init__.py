@@ -25,6 +25,7 @@ from .const import (
     CONF_NAME,
     CONF_DEVICE_TYPE,
     CONF_STREAM_PROFILE,
+    CONF_RTSP_OVER_TLS,
     DEFAULT_PORT_HTTPS,
     DEFAULT_PORT_RTSP,
     SUBENTRY_TYPE_CHANNEL,
@@ -181,6 +182,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port = entry.options.get(CONF_PORT, entry.data.get(CONF_PORT, DEFAULT_PORT_HTTPS))
     rtsp_port = entry.options.get(CONF_RTSP_PORT, entry.data.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP))
     stream_profile = entry.options.get(CONF_STREAM_PROFILE, entry.data.get(CONF_STREAM_PROFILE))
+    rtsp_over_tls = entry.options.get(CONF_RTSP_OVER_TLS, entry.data.get(CONF_RTSP_OVER_TLS))
     username = entry.data[CONF_USERNAME]
     password = entry.data.get(CONF_PASSWORD, "")
     name = entry.data.get(CONF_NAME, host)
@@ -195,6 +197,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         password=password,
         device_type=device_type,
         stream_profile=stream_profile,
+        rtsp_over_tls=rtsp_over_tls,
     )
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
