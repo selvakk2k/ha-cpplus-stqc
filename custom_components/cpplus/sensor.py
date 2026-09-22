@@ -35,13 +35,14 @@ async def async_setup_entry(
             for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
             if "channel" in s.data
         }
-        for ch in coordinator.channels:
+        all_channels = sorted(set(subentries.keys()) | {c["channel"] for c in coordinator.channels})
+        for ch_num in all_channels:
+            ch = next((c for c in coordinator.channels if c.get("channel") == ch_num), {"channel": ch_num, "index": ch_num - 1, "name": f"Channel {ch_num}", "is_native_cpplus": True})
             # Provide read-only diagnostic status sensors for third-party cameras (where switches/selects are disabled)
             if not ch.get("is_native_cpplus", False):
-                ch_idx = ch["index"]
-                ch_num = ch["channel"]
+                ch_idx = ch.get("index", ch_num - 1)
                 subentry = subentries.get(ch_num)
-                ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
+                ch_name = (subentry.title if subentry and subentry.title else None) or ch.get("name") or f"Channel {ch_num}"
                 subentry_id = subentry.subentry_id if subentry else None
 
                 channel_entities = [

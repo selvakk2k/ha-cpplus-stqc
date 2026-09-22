@@ -1,6 +1,8 @@
-"""Tests for CP PLUS STQC config flow, subentries, and stream URLs."""
+import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from unittest.mock import AsyncMock, patch
+sys.modules.setdefault("turbojpeg", MagicMock())
+
 import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -8,6 +10,7 @@ from homeassistant.data_entry_flow import FlowResultType
 
 from custom_components.cpplus.client import CPPlusClient
 from custom_components.cpplus.const import (
+    CONF_DEVICE_TYPE,
     CONF_HOST,
     CONF_NAME,
     CONF_PASSWORD,
@@ -97,6 +100,45 @@ async def test_config_flow_nvr_setup(hass: HomeAssistant, enable_custom_integrat
 
 
 @pytest.mark.asyncio
+async def test_config_flow_standalone_camera_setup(hass: HomeAssistant, enable_custom_integrations):
+    """Test standalone camera user setup flow with selector."""
+    with patch("custom_components.cpplus.config_flow.CPPlusClient") as mock_client_cls, \
+         patch("custom_components.cpplus.async_setup_entry", return_value=True):
+        mock_instance = AsyncMock()
+        mock_instance.async_get_device_info.return_value = {
+            "serial": "CAM_SERIAL_TEST_456",
+            "hardware": "CP-UNC-TA21L3C-Q",
+            "firmware": "2.860.00AT002.0.R",
+            "device_type": TYPE_CAMERA,
+        }
+        mock_client_cls.return_value = mock_instance
+
+        result = await hass.config_entries.flow.async_init(
+            DOMAIN, context={"source": config_entries.SOURCE_USER}
+        )
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "user"
+
+        result2 = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                CONF_HOST: "10.0.29.212",
+                CONF_USERNAME: "admin",
+                CONF_PASSWORD: "secret_password",
+                CONF_NAME: "Living Room Camera",
+                CONF_DEVICE_TYPE: TYPE_CAMERA,
+                CONF_PORT: 443,
+                CONF_RTSP_PORT: 554,
+            },
+        )
+        assert result2["type"] is FlowResultType.CREATE_ENTRY
+        assert result2["title"] == "CP PLUS Camera Living Room Camera"
+        assert result2["data"][CONF_HOST] == "10.0.29.212"
+        assert result2["data"]["device_type"] == TYPE_CAMERA
+
+
+
+@pytest.mark.asyncio
 async def test_subentry_channel_reconfigure(hass: HomeAssistant, enable_custom_integrations):
     """Test channel subentry renaming flow."""
     from custom_components.cpplus.config_flow import CameraChannelSubentryFlowHandler
@@ -182,4 +224,86 @@ async def test_options_flow(hass: HomeAssistant, enable_custom_integrations):
     assert result2["type"] is FlowResultType.CREATE_ENTRY
     assert entry.options[CONF_STREAM_PROFILE] == STREAM_PROFILE_DAHUA_CH1
     assert entry.options[CONF_RTSP_OVER_TLS] is False
+
+
+@pytest.mark.asyncio
+async def test_subentry_add_channel_and_direct_camera(hass: HomeAssistant, enable_custom_integrations):
+    """Test adding a channel subentry with direct camera connection."""
+    from custom_components.cpplus.config_flow import CameraChannelSubentryFlowHandler
+    from custom_components.cpplus.camera import CPPlusCamera
+    from custom_components.cpplus.coordinator import CPPlusDataUpdateCoordinator
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="CP PLUS NVR",
+        data={
+            CONF_HOST: "10.0.29.200",
+            CONF_USERNAME: "admin",
+            CONF_PASSWORD: "password",
+            "device_type": TYPE_NVR,
+        },
+        unique_id="NVR_SERIAL_TEST_123",
+    )
+    entry.add_to_hass(hass)
+
+    # Add channel subentry via user step
+    res = await hass.config_entries.subentries.async_init(
+        (entry.entry_id, SUBENTRY_TYPE_CHANNEL),
+        context={"source": config_entries.SOURCE_USER},
+    )
+    assert res["type"] is FlowResultType.FORM
+    assert res["step_id"] == "user"
+
+    # Submit with direct connection enabled
+    res2 = await hass.config_entries.subentries.async_configure(
+        res["flow_id"],
+        {
+            "channel": 18,
+            "channel_name": "Gate Intercom",
+            "direct_connection": True,
+        },
+    )
+    assert res2["type"] is FlowResultType.FORM
+    assert res2["step_id"] == "direct_camera"
+
+    # Submit direct camera IP and parameters
+    res3 = await hass.config_entries.subentries.async_configure(
+        res2["flow_id"],
+        {
+            "direct_host": "10.0.29.215",
+            "direct_rtsp_port": 554,
+            "use_nvr_credentials": True,
+        },
+    )
+    assert res3["type"] is FlowResultType.CREATE_ENTRY
+    assert res3["title"] == "Gate Intercom"
+    assert res3["data"]["direct_connection"] is True
+    assert res3["data"]["direct_host"] == "10.0.29.215"
+
+    # Verify direct camera stream source
+    client = CPPlusClient(
+        hass=hass,
+        host="10.0.29.200",
+        port=443,
+        rtsp_port=554,
+        username="admin",
+        password="secret_password",
+        device_type=TYPE_NVR,
+    )
+    coord = CPPlusDataUpdateCoordinator(hass, client, "CP PLUS NVR")
+    coord.data = {"serial": "NVR_SERIAL_TEST_123", "online": True}
+    cam = CPPlusCamera(
+        coord,
+        channel=18,
+        subtype=0,
+        stream_label="Main",
+        channel_name="Gate Intercom",
+        subentry_data=res3["data"],
+    )
+    url = await cam.stream_source()
+    assert url == "rtsp://admin:secret_password@10.0.29.215:554/cam/realmonitor?channel=1&subtype=0"
+    assert cam.extra_state_attributes["connection_mode"] == "direct"
+    assert cam.extra_state_attributes["direct_host"] == "10.0.29.215"
+
 
