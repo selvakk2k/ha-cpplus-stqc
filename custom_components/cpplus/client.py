@@ -39,10 +39,6 @@ class CPPlusConnectionError(CPPlusError):
     """Connection to device failed."""
 
 
-class CPPlusBusyError(CPPlusError):
-    """Device or session is busy (e.g. 486 Busy Here)."""
-
-
 class AsyncDigestAuth:
     """Helper to perform HTTP Digest Authentication with aiohttp."""
 
@@ -109,7 +105,7 @@ class CPPlusClient:
         session: aiohttp.ClientSession | None = None,
         use_ssl: bool = True,
         stream_profile: str | None = None,
-        rtsp_over_tls: bool | None = None,
+        rtsp_over_tls: bool = False,
     ) -> None:
         """Initialize the CP PLUS STQC client."""
         self.hass = hass
@@ -120,10 +116,8 @@ class CPPlusClient:
         self.password = password
         self.device_type = device_type
         self.use_ssl = use_ssl
-        self.rtsp_over_tls = rtsp_over_tls if rtsp_over_tls is not None else (use_ssl if device_type == TYPE_CAMERA else False)
-        self.stream_profile = stream_profile or (
-            STREAM_PROFILE_VIDEO_LIVE if device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
-        )
+        self.stream_profile = stream_profile
+        self.rtsp_over_tls = rtsp_over_tls
         self._scheme = "https" if use_ssl else "http"
         self._external_session = session is not None
         self._session = session
@@ -165,19 +159,16 @@ class CPPlusClient:
     async def async_login(self) -> bool:
         """Perform the challenge-response login over /cpapi2_Login."""
         async with self._lock:
-            if self._logged_in and self._session_id:
-                return True
-
             session = await self._get_session()
             login_url = f"{self._scheme}://{self.host}:{self.port}/cpapi2_Login"
 
-            client_type = "Web3.0"
+            # Step 1: Request authentication challenge (firstLogin)
             req1 = {
                 "method": "user.signin",
                 "params": {
                     "userName": self.username,
                     "password": "",
-                    "clientType": client_type,
+                    "clientType": "Web3.0",
                 },
                 "id": self._next_id(),
             }
@@ -198,20 +189,6 @@ class CPPlusClient:
                 _LOGGER.error("Connection error contacting CP PLUS camera %s: %s", self.host, err)
                 raise ConnectionError(f"Cannot connect to {self.host}:{self.port}") from err
 
-            # If Web3.0 slot is busy on camera, fall back to Mobile clientType (concurrent session)
-            if data1.get("error", {}).get("code") == 486:
-                _LOGGER.debug("Camera %s Web3.0 slot busy (486), falling back to Mobile clientType", self.host)
-                client_type = "Mobile"
-                req1["params"]["clientType"] = "Mobile"
-                req1["id"] = self._next_id()
-                body1 = json.dumps(req1)
-                headers1["ETag"] = hashlib.sha256(body1.encode()).hexdigest()
-                try:
-                    async with session.post(login_url, data=body1, headers=headers1) as retry_resp:
-                        data1 = await retry_resp.json(content_type=None)
-                except Exception:
-                    pass
-
             params = data1.get("params", {})
             realm = params.get("realm", "")
             random_val = params.get("random", "")
@@ -219,8 +196,6 @@ class CPPlusClient:
             encryption = params.get("encryption", "Default")
 
             if not realm or not random_val:
-                if data1.get("error", {}).get("code") == 486:
-                    raise CPPlusBusyError(f"Camera {self.host} RPC session is currently busy (486 Busy Here)")
                 raise ConnectionError(f"Unexpected challenge response from {self.host}: {data1}")
 
             # Step 2: Compute uppercase double-MD5 response matching camera specification:
@@ -239,7 +214,7 @@ class CPPlusClient:
                 "params": {
                     "userName": self.username,
                     "password": auth_hash,
-                    "clientType": client_type,
+                    "clientType": "Web3.0",
                     "authorityType": encryption,
                     "loginType": "Direct",
                 },
@@ -303,10 +278,9 @@ class CPPlusClient:
         except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise ConnectionError(f"RPC call {method} to {self.host} failed") from err
 
-        # If session expired, attempt re-login once (268632064 = session timeout, 268632065 = session invalid)
-        _LOGGER.debug("RPC %s response from %s: %s", method, self.host, data)
-        if not data.get("result") and data.get("error", {}).get("code") in [268632064, 268632065]:
-            _LOGGER.debug("Session expired on %s, attempting re-authentication", self.host)
+        # If session expired or interface error, attempt re-login once
+        if not data.get("result") and data.get("error", {}).get("code") in [268632064, 268632065, 268959743]:
+            _LOGGER.debug("Session may have expired on %s, attempting re-authentication", self.host)
             self._logged_in = False
             await self.async_login()
             req["session"] = self._session_id
@@ -336,18 +310,8 @@ class CPPlusClient:
         _LOGGER.info("Detected CP PLUS STQC standalone camera at %s", self.host)
         return TYPE_CAMERA
 
-    async def async_ping(self) -> bool:
-        """Lightweight check that the camera HTTP/HTTPS interface is responsive."""
-        session = await self._get_session()
-        url = f"{self._scheme}://{self.host}:{self.port}/"
-        try:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=4)) as resp:
-                return True
-        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-            raise CPPlusConnectionError(f"Cannot connect to camera at {self.host}:{self.port}") from err
-
-    async def async_cgi_request(self, uri: str, method: str = "GET", data: Any = None) -> str:
-        """Execute an authenticated HTTP Digest request against device CGI."""
+    async def async_nvr_request(self, uri: str, method: str = "GET", data: Any = None) -> str:
+        """Execute an authenticated HTTP Digest request against NVR CGI."""
         if not self._digest_auth:
             self._digest_auth = AsyncDigestAuth(self.username, self.password)
         session = await self._get_session()
@@ -365,21 +329,17 @@ class CPPlusClient:
                     headers["Authorization"] = self._digest_auth.build_header(method, uri)
                     async with session.request(method, url, headers=headers, data=data) as retry_resp:
                         if retry_resp.status == 401:
-                            raise CPPlusAuthError(f"Authentication failed on {self.host}")
+                            raise CPPlusAuthError(f"Authentication failed on NVR {self.host}")
                         if retry_resp.status != 200:
-                            raise ConnectionError(f"HTTP error {retry_resp.status} on {uri}")
+                            raise ConnectionError(f"NVR HTTP error {retry_resp.status} on {uri}")
                         return await retry_resp.text()
-                raise CPPlusAuthError(f"401 missing Digest challenge on {self.host}")
+                raise CPPlusAuthError(f"NVR 401 missing Digest challenge on {self.host}")
             elif resp.status == 200:
                 return await resp.text()
-            raise ConnectionError(f"HTTP error {resp.status} on {uri}")
+            raise ConnectionError(f"NVR HTTP error {resp.status} on {uri}")
 
-    async def async_nvr_request(self, uri: str, method: str = "GET", data: Any = None) -> str:
-        """Backward-compatible alias for async_cgi_request."""
-        return await self.async_cgi_request(uri, method, data)
-
-    async def async_cgi_request_bytes(self, uri: str, method: str = "GET", data: Any = None) -> bytes:
-        """Execute an authenticated HTTP Digest request returning binary bytes."""
+    async def async_nvr_request_bytes(self, uri: str, method: str = "GET", data: Any = None) -> bytes:
+        """Execute an authenticated HTTP Digest request against NVR CGI returning binary bytes."""
         if not self._digest_auth:
             self._digest_auth = AsyncDigestAuth(self.username, self.password)
         session = await self._get_session()
@@ -397,206 +357,52 @@ class CPPlusClient:
                     headers["Authorization"] = self._digest_auth.build_header(method, uri)
                     async with session.request(method, url, headers=headers, data=data) as retry_resp:
                         if retry_resp.status == 401:
-                            raise CPPlusAuthError(f"Authentication failed on {self.host}")
+                            raise CPPlusAuthError(f"Authentication failed on NVR {self.host}")
                         if retry_resp.status != 200:
-                            raise ConnectionError(f"HTTP error {retry_resp.status} on {uri}")
+                            raise ConnectionError(f"NVR HTTP error {retry_resp.status} on {uri}")
                         return await retry_resp.read()
-                raise CPPlusAuthError(f"401 missing Digest challenge on {self.host}")
+                raise CPPlusAuthError(f"NVR 401 missing Digest challenge on {self.host}")
             elif resp.status == 200:
                 return await resp.read()
-            raise ConnectionError(f"HTTP error {resp.status} on {uri}")
+            raise ConnectionError(f"NVR HTTP error {resp.status} on {uri}")
 
-    async def async_nvr_request_bytes(self, uri: str, method: str = "GET", data: Any = None) -> bytes:
-        """Backward-compatible alias for async_cgi_request_bytes."""
-        return await self.async_cgi_request_bytes(uri, method, data)
+    async def async_ping(self) -> bool:
+        """Lightweight check to verify device connectivity."""
+        if self.device_type == TYPE_NVR:
+            try:
+                await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
+                return True
+            except Exception:
+                return False
+        else:
+            try:
+                res = await self.async_call_rpc("magicBox.getDeviceType")
+                return bool(res.get("result"))
+            except Exception:
+                try:
+                    return await self.async_login()
+                except Exception:
+                    return False
 
     async def async_get_channels(self) -> list[dict[str, Any]]:
         """Query NVR or standalone camera for channels, camera names, and AI detection capabilities."""
-        if self.device_type == TYPE_CAMERA:
-            cgi_supported = False
+        if self.device_type != TYPE_NVR:
             camera_name = self.host
             try:
-                title_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle")
-                cgi_supported = True
+                title_res = await self.async_nvr_request("/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle")
                 for line in title_res.splitlines():
                     m = re.match(r"table\.ChannelTitle\[0\]\.Name=(.*)", line.strip())
                     if m and m.group(1).strip():
                         camera_name = m.group(1).strip()
-            except Exception as err:
-                _LOGGER.debug("Could not query ChannelTitle on camera %s: %s", self.host, err)
+            except Exception:
+                pass
 
-            smd_info: dict[str, bool] = {}
-            try:
-                smd_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=SmartMotionDetect")
-                cgi_supported = True
-                for line in smd_res.splitlines():
-                    m_en = re.match(r"table\.SmartMotionDetect\[0\]\.Enable=(true|false)", line.strip(), re.I)
-                    if m_en:
-                        smd_info["enable"] = m_en.group(1).lower() == "true"
-                    m_hum = re.match(r"table\.SmartMotionDetect\[0\]\.(?:ObjectTypes\.)?Human(?:Detection)?=(true|false)", line.strip(), re.I)
-                    if m_hum:
-                        smd_info["human"] = m_hum.group(1).lower() == "true"
-                    m_veh = re.match(r"table\.SmartMotionDetect\[0\]\.(?:ObjectTypes\.)?Vehicle(?:Detection)?=(true|false)", line.strip(), re.I)
-                    if m_veh:
-                        smd_info["vehicle"] = m_veh.group(1).lower() == "true"
-            except Exception as err:
-                _LOGGER.debug("Could not query SmartMotionDetect on camera %s: %s", self.host, err)
+            dev_info = self._device_info or {}
+            model = dev_info.get("hardware", "CP PLUS Camera")
+            serial_no = dev_info.get("serial")
+            firmware_ver = dev_info.get("firmware")
 
-            tripwire_enabled = False
-            has_tripwire = False
-            try:
-                trip_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=CrossLineDetection")
-                cgi_supported = True
-                for line in trip_res.splitlines():
-                    m_trip = re.match(r"table\.CrossLineDetection\[0\]\.Enable=(true|false)", line.strip(), re.I)
-                    if m_trip:
-                        has_tripwire = True
-                        tripwire_enabled = m_trip.group(1).lower() == "true"
-            except Exception as err:
-                _LOGGER.debug("Could not query CrossLineDetection on camera %s: %s", self.host, err)
-
-            video_mode = 0
-            try:
-                vim_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=VideoInMode")
-                cgi_supported = True
-                for line in vim_res.splitlines():
-                    m_vim = re.match(r"table\.VideoInMode\[0\]\.Mode=(\d+)", line.strip())
-                    if m_vim:
-                        video_mode = int(m_vim.group(1))
-            except Exception as err:
-                _LOGGER.debug("Could not query VideoInMode on camera %s: %s", self.host, err)
-
-            lighting_mode = "Auto"
-            try:
-                light_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=Lighting")
-                cgi_supported = True
-                for line in light_res.splitlines():
-                    m_light = re.match(r"table\.Lighting\[0\]\[0\]\.Mode=([a-zA-Z0-9]+)", line.strip())
-                    if m_light:
-                        lighting_mode = m_light.group(1)
-            except Exception as err:
-                _LOGGER.debug("Could not query Lighting on camera %s: %s", self.host, err)
-
-            audio_enable = True
-            try:
-                enc_res = await self.async_cgi_request("/cgi-bin/configManager.cgi?action=getConfig&name=Encode")
-                cgi_supported = True
-                for line in enc_res.splitlines():
-                    m_aud = re.match(
-                        r"table\.Encode\[0\]\.MainFormat\[0\]\.(?:Audio\.Enable|AudioEnable)=(true|false)",
-                        line.strip(),
-                        re.I,
-                    )
-                    if m_aud:
-                        audio_enable = m_aud.group(1).lower() == "true"
-            except Exception as err:
-                _LOGGER.debug("Could not query Encode on camera %s: %s", self.host, err)
-
-            # JSON-RPC fallback for STQC standalone cameras where CGI endpoints are disabled
-            if not cgi_supported:
-                if not smd_info:
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "SmartMotionDetect"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", [])
-                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                            if "Enable" in item:
-                                smd_info["enable"] = bool(item["Enable"])
-                            obj = item.get("ObjectTypes", item)
-                            if "Human" in obj or "HumanDetection" in obj:
-                                smd_info["human"] = bool(obj.get("Human", obj.get("HumanDetection")))
-                            if "Vehicle" in obj or "VehicleDetection" in obj:
-                                smd_info["vehicle"] = bool(obj.get("Vehicle", obj.get("VehicleDetection")))
-                    except Exception as err:
-                        _LOGGER.debug("RPC query for SmartMotionDetect failed on %s: %s", self.host, err)
-
-                if not has_tripwire:
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "CrossLineDetection"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", [])
-                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                            if "Enable" in item:
-                                has_tripwire = True
-                                tripwire_enabled = bool(item["Enable"])
-                    except Exception as err:
-                        _LOGGER.debug("RPC query for CrossLineDetection failed on %s: %s", self.host, err)
-
-                if not has_tripwire:
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "VideoAnalyseRule"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", [])
-                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                            rules = item.get("Rules", item.get("Rule", [])) if isinstance(item, dict) else []
-                            if rules:
-                                has_tripwire = any(
-                                    r.get("RuleType") in ("CrossLine", "CrossRegion", "LineDetection")
-                                    for r in rules if isinstance(r, dict)
-                                )
-                                tripwire_enabled = any(
-                                    bool(r.get("Enable", True))
-                                    for r in rules if isinstance(r, dict) and r.get("RuleType") in ("CrossLine", "CrossRegion", "LineDetection")
-                                )
-                    except Exception as err:
-                        _LOGGER.debug("RPC query for VideoAnalyseRule failed on %s: %s", self.host, err)
-
-                if video_mode == 0:
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "VideoInMode"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", [])
-                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                            if "Mode" in item:
-                                video_mode = int(item["Mode"])
-                    except Exception as err:
-                        _LOGGER.debug("RPC query for VideoInMode failed on %s: %s", self.host, err)
-
-                if lighting_mode == "Auto":
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "Lighting"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", [])
-                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                            if isinstance(item, list) and item:
-                                item = item[0]
-                            if isinstance(item, dict) and "Mode" in item:
-                                lighting_mode = str(item["Mode"])
-                    except Exception as err:
-                        _LOGGER.debug("RPC query for Lighting failed on %s: %s", self.host, err)
-
-                try:
-                    res = await self.async_call_rpc("configManager.getConfig", {"name": "Encode"})
-                    if res.get("result"):
-                        table = res.get("params", {}).get("table", [])
-                        item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                        fmt = item.get("MainFormat", [{}])[0] if isinstance(item.get("MainFormat"), list) else {}
-                        if "AudioEnable" in fmt or "Audio" in fmt:
-                            audio_enable = bool(fmt.get("AudioEnable", fmt.get("Audio", {}).get("Enable", True)))
-                except Exception as err:
-                    _LOGGER.debug("RPC query for Encode failed on %s: %s", self.host, err)
-
-                if camera_name == self.host:
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "ChannelTitle"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", [])
-                            item = table[0] if isinstance(table, list) and table else (table if isinstance(table, dict) else {})
-                            if "Name" in item and item["Name"]:
-                                camera_name = str(item["Name"])
-                    except Exception as err:
-                        _LOGGER.debug("RPC query for ChannelTitle failed on %s: %s", self.host, err)
-
-            model = self._device_info.get("hardware") or "CP-UNC-TA21L3C-Q"
-            serial_no = self._device_info.get("serial") or ""
-            firmware_ver = self._device_info.get("firmware") or ""
-
-            # Hardware capability profile: honor actual detected capabilities
-            is_ai_cam = any(k in model.upper() for k in ("TA21", "AI", "SMD"))
-            has_smd = smd_info.get("enable", bool(smd_info))
-            has_tripwire = bool(has_tripwire)
-
-            self._channels = [{
+            return [{
                 "index": 0,
                 "channel": 1,
                 "name": camera_name,
@@ -606,19 +412,18 @@ class CPPlusClient:
                 "serial": serial_no,
                 "firmware": firmware_ver,
                 "address": self.host,
-                "http_port": "80",
-                "https_port": str(self.port),
+                "http_port": self.port,
+                "https_port": self.port if self.use_ssl else None,
                 "vendor": "CPPLUS",
-                "has_smd": has_smd,
-                "has_tripwire": has_tripwire,
-                "smd_human": smd_info.get("human", True if (has_smd and is_ai_cam) else False),
-                "smd_vehicle": smd_info.get("vehicle", True if (has_smd and is_ai_cam) else False),
-                "tripwire": tripwire_enabled,
-                "video_in_mode": video_mode,
-                "lighting_mode": lighting_mode,
-                "audio_enable": audio_enable,
+                "has_smd": True,
+                "has_tripwire": False,
+                "smd_human": True,
+                "smd_vehicle": True,
+                "tripwire": False,
+                "video_in_mode": 0,
+                "lighting_mode": "Auto",
+                "audio_enable": True,
             }]
-            return self._channels
 
         title_res = await self.async_nvr_request("/cgi-bin/configManager.cgi?action=getConfig&name=ChannelTitle")
         title_map: dict[int, str] = {}
@@ -784,6 +589,9 @@ class CPPlusClient:
         on_disconnect: Callable[[], None] | None = None,
     ) -> None:
         """Connect to eventManager.cgi and dispatch real-time events to callback."""
+        if self.device_type != TYPE_NVR:
+            return
+
         if self._event_auth is None:
             self._event_auth = AsyncDigestAuth(self.username, self.password)
 
@@ -811,7 +619,7 @@ class CPPlusClient:
                         consecutive_401 += 1
                         if consecutive_401 >= 2:
                             _LOGGER.error(
-                                "Event stream authentication failed with consecutive 401s on %s. Halting stream.",
+                                "NVR event stream authentication failed with consecutive 401s on %s. Halting stream.",
                                 self.host,
                             )
                             if on_auth_failed:
@@ -819,24 +627,17 @@ class CPPlusClient:
                                     on_auth_failed()
                                 except Exception:
                                     pass
-                            raise CPPlusAuthError(f"Authentication failed on event stream {self.host}")
+                            raise CPPlusAuthError(f"Authentication failed on NVR event stream {self.host}")
 
                         auth_hdr = resp.headers.get("WWW-Authenticate", "")
                         if "Digest" in auth_hdr:
                             self._event_auth.parse_challenge(auth_hdr)
                             await asyncio.sleep(0.1)
                             continue
-                        raise CPPlusAuthError(f"Event stream 401 missing Digest challenge on {self.host}")
-
-                    if resp.status == 404:
-                        _LOGGER.info(
-                            "Event stream endpoint not supported on %s (HTTP 404). Halting event stream listener.",
-                            self.host,
-                        )
-                        return
+                        raise CPPlusAuthError(f"NVR event stream 401 missing Digest challenge on {self.host}")
 
                     if resp.status != 200:
-                        _LOGGER.warning("Event stream HTTP %s on %s, reconnecting...", resp.status, self.host)
+                        _LOGGER.warning("NVR event stream HTTP %s on %s, reconnecting...", resp.status, self.host)
                         if on_disconnect:
                             try:
                                 on_disconnect()
@@ -890,7 +691,7 @@ class CPPlusClient:
                         pass
                 raise
             except (aiohttp.ClientError, asyncio.TimeoutError) as err:
-                _LOGGER.debug("Event stream reconnecting (%s)", err)
+                _LOGGER.debug("NVR event stream reconnecting (%s)", err)
                 if on_disconnect:
                     try:
                         on_disconnect()
@@ -898,7 +699,7 @@ class CPPlusClient:
                         pass
                 await asyncio.sleep(3)
             except Exception as err:
-                _LOGGER.error("Unexpected error in event listener: %s", err)
+                _LOGGER.error("Unexpected error in NVR event listener: %s", err)
                 if on_disconnect:
                     try:
                         on_disconnect()
@@ -906,9 +707,9 @@ class CPPlusClient:
                         pass
                 await asyncio.sleep(5)
 
-    async def async_get_device_info(self, fallback_serial: str | None = None) -> dict[str, Any]:
+    async def async_get_device_info(self) -> dict[str, Any]:
         """Fetch device model, machine name, and serial number."""
-        if not self.device_type:
+        if not self.device_type or self.device_type == TYPE_CAMERA:
             await self.async_detect_device_type()
 
         if self.device_type == TYPE_NVR:
@@ -917,7 +718,7 @@ class CPPlusClient:
             firmware = "Unknown"
 
             try:
-                dev_res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
+                dev_res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
                 for line in dev_res.splitlines():
                     if line.startswith("type="):
                         model = line.split("=", 1)[1].strip()
@@ -927,7 +728,7 @@ class CPPlusClient:
                 _LOGGER.debug("NVR getDeviceType error on %s: %s", self.host, err)
 
             try:
-                sys_res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=getSystemInfo")
+                sys_res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=getSystemInfo")
                 for line in sys_res.splitlines():
                     if line.startswith("serialNumber="):
                         serial = line.split("=", 1)[1].strip()
@@ -944,7 +745,7 @@ class CPPlusClient:
 
             if firmware == "Unknown":
                 try:
-                    ver_res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=getSoftwareVersion")
+                    ver_res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=getSoftwareVersion")
                     for line in ver_res.splitlines():
                         if line.startswith("version="):
                             firmware = line.split("=", 1)[1].strip()
@@ -962,164 +763,55 @@ class CPPlusClient:
             return self._device_info
 
         # Standalone Camera flow
+        if not self._logged_in:
+            await self.async_login()
+
         model = "CP PLUS STQC IPC"
         serial = ""
         firmware = "Unknown"
 
-        # 1. Query standard CGI endpoints via HTTP Digest
         try:
-            dev_res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
-            for line in dev_res.splitlines():
-                if line.startswith("type="):
-                    model = line.split("=", 1)[1].strip()
+            res = await self.async_call_rpc("magicBox.getDeviceType")
+            if res.get("result") and "type" in res.get("params", {}):
+                model = res["params"]["type"]
         except CPPlusAuthError:
             raise
         except Exception as err:
-            _LOGGER.debug("Camera getDeviceType error on %s: %s", self.host, err)
+            _LOGGER.debug("Could not get device type on %s: %s", self.host, err)
 
         try:
-            sys_res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=getSystemInfo")
-            for line in sys_res.splitlines():
-                if line.startswith("serialNumber="):
-                    serial = line.split("=", 1)[1].strip()
-                elif line.startswith("appVersion="):
-                    firmware = line.split("=", 1)[1].strip()
+            res = await self.async_call_rpc("magicBox.getSerialNo")
+            if res.get("result") and "serial" in res.get("params", {}):
+                serial = res["params"]["serial"]
         except CPPlusAuthError:
             raise
-        except Exception as err:
-            _LOGGER.debug("Camera getSystemInfo error on %s: %s", self.host, err)
-
-        if firmware == "Unknown":
-            try:
-                ver_res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=getSoftwareVersion")
-                for line in ver_res.splitlines():
-                    if line.startswith("version="):
-                        firmware = line.split("=", 1)[1].strip()
-            except CPPlusAuthError:
-                raise
-            except Exception as err:
-                _LOGGER.debug("Camera getSoftwareVersion error on %s: %s", self.host, err)
-
-        # 2. If serial number, model, or firmware is missing/default, fallback to JSON-RPC /cpapi2
-        if not serial or firmware == "Unknown" or model == "CP PLUS STQC IPC":
-            if not self._logged_in:
-                try:
-                    await self.async_login()
-                except Exception as err:
-                    _LOGGER.debug("RPC login fallback failed on %s: %s", self.host, err)
-
-            if self._logged_in:
-                # Query device model via RPC
-                if model == "CP PLUS STQC IPC":
-                    try:
-                        res = await self.async_call_rpc("magicBox.getDeviceType")
-                        if res.get("result"):
-                            p = res.get("params", {})
-                            if "type" in p and p["type"]:
-                                model = p["type"]
-                    except Exception:
-                        pass
-
-                # Query serial number
-                if not serial:
-                    try:
-                        res = await self.async_call_rpc("magicBox.getSerialNo")
-                        if res.get("result") and "serial" in res.get("params", {}):
-                            serial = res["params"]["serial"]
-                    except Exception:
-                        pass
-
-                # Query system info (contains model, serial, and software version on STQC)
-                try:
-                    res = await self.async_call_rpc("magicBox.getSystemInfo")
-                    if res.get("result"):
-                        p = res.get("params", {})
-                        info = p.get("info", p)
-                        if not serial:
-                            serial = info.get("serialNumber") or info.get("serial") or ""
-                        if model == "CP PLUS STQC IPC":
-                            model = info.get("deviceType") or info.get("type") or model
-                        if firmware == "Unknown":
-                            v = info.get("appVersion") or info.get("softwareVersion") or info.get("version") or info.get("Version")
-                            b = info.get("buildDate") or info.get("build") or info.get("buildTime") or info.get("BuildDate")
-                            if v and v != "Unknown":
-                                firmware = f"{v} (Build: {b})" if b else str(v)
-                except Exception:
-                    pass
-
-                if not serial:
-                    try:
-                        res = await self.async_call_rpc("configManager.getConfig", {"name": "General"})
-                        if res.get("result"):
-                            table = res.get("params", {}).get("table", {})
-                            machine_name = table.get("MachineName")
-                            if machine_name:
-                                serial = machine_name
-                    except Exception:
-                        pass
-
-                # Query software version via dedicated version endpoints
-                if firmware == "Unknown":
-                    for method in ("magicBox.getSoftwareVersion", "system.getVersion", "magicBox.getSystemInfo"):
-                        try:
-                            res = await self.async_call_rpc(method)
-                            if res.get("result"):
-                                p = res.get("params", {})
-                                info_dict = p.get("info", p) if isinstance(p.get("info"), dict) else p
-                                v = None
-                                b = None
-                                if isinstance(info_dict, dict):
-                                    for k, val in info_dict.items():
-                                        k_lower = k.lower()
-                                        if k_lower in ("version", "softwareversion", "appversion", "sysversion", "firmwareversion") and val and val != "Unknown":
-                                            v = str(val)
-                                        elif k_lower in ("builddate", "build", "buildtime") and val:
-                                            b = str(val)
-                                if v:
-                                    firmware = f"{v} (Build: {b})" if b else str(v)
-                                    break
-                        except Exception:
-                            pass
-
-                if firmware == "Unknown":
-                    for cfg_name in ("SoftwareVersion", "Version", "General"):
-                        try:
-                            res = await self.async_call_rpc("configManager.getConfig", {"name": cfg_name})
-                            if res.get("result"):
-                                table = res.get("params", {}).get("table", {})
-                                if isinstance(table, dict):
-                                    v = table.get("Version") or table.get("SoftwareVersion") or table.get("version")
-                                    b = table.get("BuildDate") or table.get("Build") or table.get("buildDate")
-                                    if v and v != "Unknown":
-                                        firmware = f"{v} (Build: {b})" if b else str(v)
-                                        break
-                        except Exception:
-                            pass
-
-        # Cleanly format firmware string if raw dict or dict string was returned
-        if isinstance(firmware, dict):
-            ver = firmware.get("Version") or firmware.get("version") or firmware.get("softwareVersion") or "Unknown"
-            bdate = firmware.get("BuildDate") or firmware.get("buildDate") or firmware.get("build")
-            firmware = f"{ver} (Build: {bdate})" if bdate else str(ver)
-        elif isinstance(firmware, str) and ("Version" in firmware or "softwareVersion" in firmware) and "{" in firmware:
-            try:
-                import ast
-                parsed = ast.literal_eval(firmware)
-                if isinstance(parsed, dict):
-                    ver = parsed.get("Version") or parsed.get("version") or parsed.get("softwareVersion") or "Unknown"
-                    bdate = parsed.get("BuildDate") or parsed.get("buildDate") or parsed.get("build")
-                    firmware = f"{ver} (Build: {bdate})" if bdate else str(ver)
-            except Exception:
-                pass
-
-        if not serial and fallback_serial and not fallback_serial.replace(".", "").isdigit():
-            serial = fallback_serial
+        except Exception:
+            pass
 
         if not serial:
             raise CPPlusError(f"Failed to retrieve serial number from camera at {self.host}")
 
-        if model == "CP PLUS STQC IPC":
-            model = "CP-UNC-TA21L3C-Q"
+        try:
+            res = await self.async_call_rpc("magicBox.getSoftwareVersion")
+            if res.get("result") and "version" in res.get("params", {}):
+                firmware = res["params"]["version"]
+        except Exception:
+            pass
+
+        if firmware == "Unknown":
+            try:
+                res = await self.async_call_rpc("magicBox.getSystemInfo")
+                if res.get("result"):
+                    params = res.get("params", {})
+                    info = params.get("info", params)
+                    ver = info.get("Version") or info.get("version") or info.get("softwareVersion")
+                    build_date = info.get("BuildDate") or info.get("buildDate")
+                    if ver and build_date:
+                        firmware = f"{ver} (Build: {build_date})"
+                    elif ver:
+                        firmware = str(ver)
+            except Exception:
+                pass
 
         self._device_info = {
             "serial": serial,
@@ -1140,18 +832,11 @@ class CPPlusClient:
         """Send reboot command to CP PLUS camera or NVR."""
         if self.device_type == TYPE_NVR:
             try:
-                res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=reboot")
+                res = await self.async_nvr_request("/cgi-bin/magicBox.cgi?action=reboot")
                 return self._is_ok_response(res) or res.strip().lower() == "success"
             except Exception as err:
                 _LOGGER.error("Failed to reboot NVR at %s: %s", self.host, err)
                 return False
-
-        try:
-            res = await self.async_cgi_request("/cgi-bin/magicBox.cgi?action=reboot")
-            if self._is_ok_response(res) or res.strip().lower() == "success":
-                return True
-        except Exception:
-            pass
 
         try:
             res = await self.async_call_rpc("magicBox.reboot")
@@ -1166,154 +851,75 @@ class CPPlusClient:
         subtype: int = 0,
         stream_profile: str | None = None,
         use_tls: bool | None = None,
-        host_override: str | None = None,
-        port_override: int | None = None,
-        username_override: str | None = None,
-        password_override: str | None = None,
     ) -> str:
         """Return the RTSP / RTSPS stream URL for the requested channel and stream type."""
         # Subtype 0 = Main Stream (HD), 1 = Sub Stream (SD)
-        # Use safe RFC 3986 sub-delims so FFmpeg Digest Auth does not receive corrupted %XX password
-        raw_user = username_override if username_override is not None else self.username
-        raw_pass = password_override if password_override is not None else self.password
-        username = urllib.parse.quote(raw_user, safe="!$&'()*+,-._~")
-        password = urllib.parse.quote(raw_pass, safe="!$&'()*+,-._~")
-
-        target_host = host_override or self.host
-        target_port = port_override or self.rtsp_port
+        username = urllib.parse.quote(self.username, safe="")
+        password = urllib.parse.quote(self.password, safe="")
 
         profile = stream_profile or getattr(self, "stream_profile", None)
         if not profile:
             profile = STREAM_PROFILE_VIDEO_LIVE if self.device_type == TYPE_CAMERA else STREAM_PROFILE_DAHUA_CH1
 
-        is_tls = use_tls if use_tls is not None else getattr(self, "rtsp_over_tls", False)
-        scheme = "rtsps" if is_tls else "rtsp"
+        scheme = "rtsps" if (use_tls if use_tls is not None else getattr(self, "rtsp_over_tls", False)) else "rtsp"
 
         if profile == STREAM_PROFILE_VIDEO_LIVE:
             return (
-                f"{scheme}://{username}:{password}@{target_host}:{target_port}"
+                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
                 f"/video/live?channel={channel}&subtype={subtype}"
             )
         elif profile == STREAM_PROFILE_ONVIF:
             onvif_path = f"onvif{subtype + 1}"
-            return f"{scheme}://{username}:{password}@{target_host}:{target_port}/{onvif_path}"
+            return f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}/{onvif_path}"
         elif profile == STREAM_PROFILE_LIVE:
-            return f"{scheme}://{username}:{password}@{target_host}:{target_port}/live"
+            return f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}/live"
         elif profile == STREAM_PROFILE_DAHUA_CH0:
             return (
-                f"{scheme}://{username}:{password}@{target_host}:{target_port}"
+                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
                 f"/cam/realmonitor?channel=0&subtype={subtype}"
             )
         else:
             return (
-                f"{scheme}://{username}:{password}@{target_host}:{target_port}"
+                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
                 f"/cam/realmonitor?channel={channel}&subtype={subtype}"
             )
 
-    async def async_get_snapshot(
-        self,
-        channel: int = 1,
-        host_override: str | None = None,
-        port_override: int | None = None,
-        username_override: str | None = None,
-        password_override: str | None = None,
-    ) -> bytes | None:
+    async def async_get_snapshot(self, channel: int = 1) -> bytes | None:
         """Fetch a snapshot JPEG image from camera or NVR using Digest authentication."""
-        if host_override:
-            scheme = "https" if (port_override == 443) else "http"
-            port = port_override or 80
-            user = username_override or self.username
-            pwd = password_override or self.password
-            digest = AsyncDigestAuth(user, pwd)
-            session = await self._get_session()
-
-            urls_to_try = [
-                f"/cgi-bin/snapshot.cgi?channel=1",
-                f"/cgi-bin/snapshot.cgi?channel=0",
-                f"/cgi-bin/snapshot.cgi",
-            ]
-            for uri in urls_to_try:
-                try:
-                    url = f"{scheme}://{host_override}:{port}{uri}"
-                    headers = {"User-Agent": "Mozilla/5.0"}
-                    if digest.realm and digest.nonce:
-                        headers["Authorization"] = digest.build_header("GET", uri)
-                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
-                        if resp.status == 401:
-                            auth_hdr = resp.headers.get("WWW-Authenticate", "")
-                            if "Digest" in auth_hdr:
-                                digest.parse_challenge(auth_hdr)
-                                headers["Authorization"] = digest.build_header("GET", uri)
-                                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as retry_resp:
-                                    if retry_resp.status == 200:
-                                        data = await retry_resp.read()
-                                        if data and len(data) > 100:
-                                            return data
-                        elif resp.status == 200:
-                            data = await resp.read()
-                            if data and len(data) > 100:
-                                return data
-                except Exception as err:
-                    _LOGGER.debug("Direct snapshot failed for uri %s on %s: %s", uri, host_override, err)
+        try:
+            return await self.async_nvr_request_bytes(f"/cgi-bin/snapshot.cgi?channel={channel}")
+        except Exception as err:
+            _LOGGER.debug("HTTP snapshot failed for channel %d at %s: %s", channel, self.host, err)
             return None
-
-        urls_to_try = [
-            f"/cgi-bin/snapshot.cgi?channel={channel}",
-            f"/cgi-bin/snapshot.cgi",
-            f"/cgi-bin/snapshot.cgi?channel=0",
-            f"/onvif/snapshot",
-        ] if self.device_type == TYPE_CAMERA else [
-            f"/cgi-bin/snapshot.cgi?channel={channel}",
-            f"/cgi-bin/snapshot.cgi",
-        ]
-
-        for uri in urls_to_try:
-            try:
-                data = await self.async_cgi_request_bytes(uri)
-                if data and len(data) > 100:
-                    return data
-            except Exception as err:
-                _LOGGER.debug("Snapshot failed for uri %s on %s: %s", uri, self.host, err)
-        return None
 
     async def async_set_video_in_mode(self, channel_idx: int, mode: int) -> bool:
         """Set VideoInMode (Day/Night) for a channel: 0=Color, 1=Auto, 2=Black & White."""
+        if self.device_type != TYPE_NVR:
+            return False
         uri = f"/cgi-bin/configManager.cgi?action=setConfig&VideoInMode[{channel_idx}].Mode={mode}"
         try:
-            res = await self.async_cgi_request(uri)
-            if self._is_ok_response(res):
-                return True
-        except Exception:
-            pass
-
-        if self.device_type == TYPE_CAMERA:
-            try:
-                res_rpc = await self.async_call_rpc("configManager.setConfig", {"name": "VideoInMode", "table": [{"Mode": mode}]})
-                return bool(res_rpc.get("result"))
-            except Exception as err:
-                _LOGGER.error("Failed to set VideoInMode via RPC on camera %s: %s", self.host, err)
-        return False
+            res = await self.async_nvr_request(uri)
+            return self._is_ok_response(res)
+        except Exception as err:
+            _LOGGER.error("Failed to set VideoInMode on channel %d: %s", channel_idx, err)
+            return False
 
     async def async_set_lighting_mode(self, channel_idx: int, mode: str) -> bool:
         """Set Lighting mode for a channel: Auto, Manual, Off."""
+        if self.device_type != TYPE_NVR:
+            return False
         uri = f"/cgi-bin/configManager.cgi?action=setConfig&Lighting[{channel_idx}][0].Mode={mode}"
         try:
-            res = await self.async_cgi_request(uri)
-            if self._is_ok_response(res):
-                return True
-        except Exception:
-            pass
-
-        if self.device_type == TYPE_CAMERA:
-            try:
-                res_rpc = await self.async_call_rpc("configManager.setConfig", {"name": "Lighting", "table": [[{"Mode": mode}]]})
-                return bool(res_rpc.get("result"))
-            except Exception as err:
-                _LOGGER.error("Failed to set Lighting mode via RPC on camera %s: %s", self.host, err)
-        return False
+            res = await self.async_nvr_request(uri)
+            return self._is_ok_response(res)
+        except Exception as err:
+            _LOGGER.error("Failed to set Lighting mode on channel %d: %s", channel_idx, err)
+            return False
 
     async def async_set_smd_human(self, channel_idx: int, enable: bool) -> bool:
         """Enable or disable SmartMotionDetect Human recognition on a channel."""
+        if self.device_type != TYPE_NVR:
+            return False
         en_str = "true" if enable else "false"
         uri = (
             f"/cgi-bin/configManager.cgi?action=setConfig"
@@ -1321,25 +927,16 @@ class CPPlusClient:
             f"&SmartMotionDetect[{channel_idx}].ObjectTypes.Human={en_str}"
         )
         try:
-            res = await self.async_cgi_request(uri)
-            if self._is_ok_response(res):
-                return True
-        except Exception:
-            pass
-
-        if self.device_type == TYPE_CAMERA:
-            try:
-                res_rpc = await self.async_call_rpc(
-                    "configManager.setConfig",
-                    {"name": "SmartMotionDetect", "table": [{"Enable": True, "ObjectTypes": {"Human": enable}}]},
-                )
-                return bool(res_rpc.get("result"))
-            except Exception as err:
-                _LOGGER.error("Failed to set SMD Human via RPC on camera %s: %s", self.host, err)
-        return False
+            res = await self.async_nvr_request(uri)
+            return self._is_ok_response(res)
+        except Exception as err:
+            _LOGGER.error("Failed to set SMD Human on channel %d: %s", channel_idx, err)
+            return False
 
     async def async_set_smd_vehicle(self, channel_idx: int, enable: bool) -> bool:
         """Enable or disable SmartMotionDetect Vehicle recognition on a channel."""
+        if self.device_type != TYPE_NVR:
+            return False
         en_str = "true" if enable else "false"
         uri = (
             f"/cgi-bin/configManager.cgi?action=setConfig"
@@ -1347,47 +944,29 @@ class CPPlusClient:
             f"&SmartMotionDetect[{channel_idx}].ObjectTypes.Vehicle={en_str}"
         )
         try:
-            res = await self.async_cgi_request(uri)
-            if self._is_ok_response(res):
-                return True
-        except Exception:
-            pass
-
-        if self.device_type == TYPE_CAMERA:
-            try:
-                res_rpc = await self.async_call_rpc(
-                    "configManager.setConfig",
-                    {"name": "SmartMotionDetect", "table": [{"Enable": True, "ObjectTypes": {"Vehicle": enable}}]},
-                )
-                return bool(res_rpc.get("result"))
-            except Exception as err:
-                _LOGGER.error("Failed to set SMD Vehicle via RPC on camera %s: %s", self.host, err)
-        return False
+            res = await self.async_nvr_request(uri)
+            return self._is_ok_response(res)
+        except Exception as err:
+            _LOGGER.error("Failed to set SMD Vehicle on channel %d: %s", channel_idx, err)
+            return False
 
     async def async_set_tripwire(self, channel_idx: int, enable: bool) -> bool:
         """Enable or disable CrossLineDetection (Tripwire) on a channel."""
+        if self.device_type != TYPE_NVR:
+            return False
         en_str = "true" if enable else "false"
         uri = f"/cgi-bin/configManager.cgi?action=setConfig&CrossLineDetection[{channel_idx}].Enable={en_str}"
         try:
-            res = await self.async_cgi_request(uri)
-            if self._is_ok_response(res):
-                return True
-        except Exception:
-            pass
-
-        if self.device_type == TYPE_CAMERA:
-            try:
-                res_rpc = await self.async_call_rpc(
-                    "configManager.setConfig",
-                    {"name": "CrossLineDetection", "table": [{"Enable": enable}]},
-                )
-                return bool(res_rpc.get("result"))
-            except Exception as err:
-                _LOGGER.error("Failed to set CrossLineDetection via RPC on camera %s: %s", self.host, err)
-        return False
+            res = await self.async_nvr_request(uri)
+            return self._is_ok_response(res)
+        except Exception as err:
+            _LOGGER.error("Failed to set CrossLineDetection on channel %d: %s", channel_idx, err)
+            return False
 
     async def async_set_audio_enable(self, channel_idx: int, enable: bool) -> bool:
         """Enable or disable audio transmission on channel RTSP stream."""
+        if self.device_type != TYPE_NVR:
+            return False
         val = "true" if enable else "false"
         uri = (
             f"/cgi-bin/configManager.cgi?action=setConfig"
@@ -1395,31 +974,20 @@ class CPPlusClient:
             f"&table.Encode[{channel_idx}].ExtraFormat[0].AudioEnable={val}"
         )
         try:
-            res = await self.async_cgi_request(uri)
+            res = await self.async_nvr_request(uri)
             if self._is_ok_response(res):
                 return True
-            # Fallback without 'table.' prefix if firmware prefers Encode[x]
+            # Fallback without 'table.' prefix if NVR firmware prefers Encode[x]
             fallback_uri = (
                 f"/cgi-bin/configManager.cgi?action=setConfig"
                 f"&Encode[{channel_idx}].MainFormat[0].AudioEnable={val}"
                 f"&Encode[{channel_idx}].ExtraFormat[0].AudioEnable={val}"
             )
-            res2 = await self.async_cgi_request(fallback_uri)
-            if self._is_ok_response(res2):
-                return True
-        except Exception:
-            pass
-
-        if self.device_type == TYPE_CAMERA:
-            try:
-                res_rpc = await self.async_call_rpc(
-                    "configManager.setConfig",
-                    {"name": "Encode", "table": [{"MainFormat": [{"AudioEnable": enable}]}]},
-                )
-                return bool(res_rpc.get("result"))
-            except Exception as err:
-                _LOGGER.error("Failed to set audio enable via RPC on camera %s: %s", self.host, err)
-        return False
+            res2 = await self.async_nvr_request(fallback_uri)
+            return self._is_ok_response(res2)
+        except Exception as err:
+            _LOGGER.error("Failed to set audio enable on channel %d: %s", channel_idx, err)
+            return False
 
     async def async_ptz_control(
         self,
@@ -1462,30 +1030,10 @@ class CPPlusClient:
         self._stopped = True
         if self._logged_in and self.device_type == TYPE_CAMERA:
             try:
-                await self.async_call_rpc("global.logout")
-            except Exception:
-                pass
-            try:
-                session = await self._get_session()
-                logout_url = f"{self._scheme}://{self.host}:{self.port}/cpapi2_Login"
-                req = {
-                    "method": "user.signout",
-                    "params": {},
-                    "id": self._next_id(),
-                    "session": self._session_id,
-                }
-                body = json.dumps(req)
-                headers = {
-                    "Content-Type": "application/json",
-                    "ETag": hashlib.sha256(body.encode()).hexdigest(),
-                    "User-Agent": "Mozilla/5.0",
-                }
-                async with session.post(logout_url, data=body, headers=headers, timeout=aiohttp.ClientTimeout(total=2)):
-                    pass
+                await self.async_call_rpc("user.signout")
             except Exception:
                 pass
             self._logged_in = False
-            self._session_id = None
 
         if self._event_session and not self._event_session.closed:
             await self._event_session.close()

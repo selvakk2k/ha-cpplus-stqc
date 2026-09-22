@@ -27,7 +27,7 @@ async def async_setup_entry(
         CPPlusRebootButton(coordinator),
     ]
 
-    async_add_entities(entities, config_subentry_id=coordinator.hub_subentry_id)
+    async_add_entities(entities)
 
 
 class CPPlusRebootButton(CoordinatorEntity[CPPlusDataUpdateCoordinator], ButtonEntity):

@@ -2,37 +2,13 @@
   "config": {
     "step": {
       "user": {
-        "title": "Select Connection Mode",
-        "description": "Choose how you want to connect your CP PLUS surveillance equipment to Home Assistant.",
-        "menu_options": {
-          "nvr": "Network Video Recorder (NVR)",
-          "standalone": "Standalone IP Camera"
-        },
-        "menu_option_descriptions": {
-          "nvr": "Connect through a central NVR to discover and manage all camera channels automatically. Recommended for multi-camera installations; works reliably even when cameras are on isolated PoE subnets or separate surveillance VLANs.",
-          "standalone": "Connect directly to a single IP camera on your network. Enables direct on-camera features and two-way talk, but requires the camera to be directly reachable by Home Assistant on your local network."
-        }
-      },
-      "nvr": {
-        "title": "Configure CP PLUS NVR",
-        "description": "Enter connection credentials for your central NVR hardware.",
+        "title": "Add CP PLUS STQC Device",
+        "description": "Enter the connection details for your CP PLUS camera or NVR.",
         "data": {
-          "host": "NVR IP Address / Hostname",
+          "host": "IP Address",
           "username": "Username",
           "password": "Password",
-          "name": "Friendly Name (Optional)",
-          "port": "HTTPS Port (Default: 443)",
-          "rtsp_port": "RTSP Port (Default: 554)"
-        }
-      },
-      "standalone": {
-        "title": "Configure Standalone Camera",
-        "description": "Enter connection credentials for your standalone CP PLUS IP camera.",
-        "data": {
-          "host": "Camera IP Address",
-          "username": "Username",
-          "password": "Password",
-          "name": "Camera Name (Optional)",
+          "name": "Device Name",
           "port": "HTTPS Port (Default: 443)",
           "rtsp_port": "RTSP Port (Default: 554)"
         }
@@ -43,10 +19,21 @@
         "data": {
           "password": "Password"
         }
+      },
+      "reconfigure_confirm": {
+        "title": "Reconfigure CP PLUS Device",
+        "description": "Update connection settings or credentials for your device.",
+        "data": {
+          "host": "IP Address",
+          "username": "Username",
+          "password": "Password",
+          "port": "HTTPS Port",
+          "rtsp_port": "RTSP Port"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the device. Check IP and port.",
+      "cannot_connect": "Failed to connect to the CP PLUS device. Check IP and port.",
       "invalid_auth": "Invalid username or password.",
       "unknown": "An unexpected error occurred."
     },
@@ -56,85 +43,28 @@
       "wrong_device": "The device responded with a different serial number than the configured device."
     }
   },
-  "config_subentries": {
-    "nvr_hub": {
-      "entry_type": "NVR Hub",
-      "initiate_flow": {
-        "user": "Configure NVR Hub"
-      },
-      "step": {
-        "user": {
-          "title": "Configure NVR Hub",
-          "description": "System settings for the central NVR hub."
-        },
-        "reconfigure": {
-          "title": "Configure NVR Hub",
-          "description": "Adjust configuration options for the central NVR hub.",
-          "data": {
-            "name": "NVR Name"
-          }
-        }
-      },
-      "abort": {
-        "already_configured": "The NVR Hub is already configured for this device."
-      }
-    },
-    "camera_channel": {
-      "entry_type": "Camera Channel",
-      "initiate_flow": {
-        "user": "Add Camera Channel"
-      },
-      "step": {
-        "user": {
-          "title": "Add Camera Channel",
-          "description": "Select an available channel on the NVR to configure in Home Assistant.",
-          "data": {
-            "channel": "Channel",
-            "name": "Channel Name (Optional)"
-          }
-        },
-        "reconfigure": {
-          "title": "Configure Camera Channel",
-          "description": "Adjust configuration options for this camera channel.",
-          "data": {
-            "name": "Channel Name",
-            "direct_connection": "Direct Camera Connection (Bypass NVR Proxy)"
-          }
-        },
-        "direct_camera": {
-          "title": "Direct Camera Connection Settings",
-          "description": "Configure direct streaming settings for this camera or intercom.",
-          "data": {
-            "direct_host": "Direct Camera IP Address",
-            "stream_profile": "RTSP Stream Profile",
-            "direct_rtsp_port": "Direct RTSP Port (Default: 554)",
-            "direct_http_port": "Direct HTTP Port (Default: 80)",
-            "use_nvr_credentials": "Use NVR Username & Password",
-            "direct_username": "Custom Camera Username",
-            "direct_password": "Custom Camera Password"
-          }
-        }
-      },
-      "error": {
-        "channel_exists": "A subentry for this channel number already exists.",
-        "no_channels_available": "All channels on this NVR are already configured."
-      },
-      "abort": {
-        "already_configured": "This channel is already configured as a subentry.",
-        "no_channels_available": "All channels on this NVR are already configured."
-      }
-    }
-  },
   "options": {
     "step": {
       "init": {
-        "title": "Configure Connection & Stream Options",
-        "description": "Adjust stream profile, RTSP streaming port, and HTTP/HTTPS connection port.",
+        "title": "CP PLUS Options",
+        "description": "Adjust stream profile and communication options.",
         "data": {
+          "rtsp_port": "RTSP Port",
           "stream_profile": "RTSP Stream Profile",
-          "rtsp_over_tls": "RTSP over TLS (RTSPS Encryption)",
-          "rtsp_port": "RTSP Port (Default: 554)",
-          "port": "HTTP / HTTPS Port (Default: 443, Camera Default: 80)"
+          "rtsp_over_tls": "RTSP over TLS (RTSPS)"
+        }
+      }
+    }
+  },
+  "subentries": {
+    "channel": {
+      "step": {
+        "reconfigure": {
+          "title": "Channel Settings",
+          "description": "Edit the display name for Channel {channel}.",
+          "data": {
+            "channel_name": "Channel Name"
+          }
         }
       }
     }

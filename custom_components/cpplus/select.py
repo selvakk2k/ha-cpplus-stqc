@@ -11,7 +11,6 @@ from homeassistant.helpers.entity import EntityCategory
 
 from .const import (
     DOMAIN,
-    SUBENTRY_TYPE_CHANNEL,
     TYPE_NVR,
     DAY_NIGHT_MODES,
     DAY_NIGHT_NAME_TO_INT,
@@ -28,12 +27,9 @@ async def async_setup_entry(
     """Set up CP PLUS select entities."""
     coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
 
+    entities: list[SelectEntity] = []
+
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
-        subentries = {
-            int(s.data["channel"]): s
-            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
-            if "channel" in s.data
-        }
         for ch in coordinator.channels:
             # Only create control selectors for native CP PLUS cameras (CP-*)
             if not ch.get("is_native_cpplus", False):
@@ -41,45 +37,29 @@ async def async_setup_entry(
 
             ch_idx = ch["index"]
             ch_num = ch["channel"]
-            subentry = subentries.get(ch_num)
-            ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
-            subentry_id = subentry.subentry_id if subentry else None
+            ch_name = ch["name"]
 
-            entities: list[SelectEntity] = [
-                # Day/Night Video In Mode
+            # Day/Night Video In Mode
+            entities.append(
                 CPPlusDayNightSelect(
                     coordinator=coordinator,
                     channel_idx=ch_idx,
                     channel_num=ch_num,
                     channel_name=ch_name,
-                ),
-                # Illuminator / Lighting Mode
+                )
+            )
+
+            # Illuminator / Lighting Mode
+            entities.append(
                 CPPlusIlluminatorSelect(
                     coordinator=coordinator,
                     channel_idx=ch_idx,
                     channel_num=ch_num,
                     channel_name=ch_name,
-                ),
-            ]
-            async_add_entities(entities, config_subentry_id=subentry_id)
+                )
+            )
 
-    elif coordinator.channels:
-        # Standalone Camera single channel
-        standalone_selects: list[SelectEntity] = [
-            CPPlusDayNightSelect(
-                coordinator=coordinator,
-                channel_idx=0,
-                channel_num=1,
-                channel_name=None,
-            ),
-            CPPlusIlluminatorSelect(
-                coordinator=coordinator,
-                channel_idx=0,
-                channel_num=1,
-                channel_name=None,
-            ),
-        ]
-        async_add_entities(standalone_selects, config_subentry_id=coordinator.hub_subentry_id)
+    async_add_entities(entities)
 
 
 class CPPlusDayNightSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], SelectEntity):
@@ -95,7 +75,7 @@ class CPPlusDayNightSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Selec
         coordinator: CPPlusDataUpdateCoordinator,
         channel_idx: int,
         channel_num: int,
-        channel_name: str | None,
+        channel_name: str,
     ) -> None:
         """Initialize Day/Night select entity."""
         super().__init__(coordinator)
@@ -103,19 +83,14 @@ class CPPlusDayNightSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Selec
         self._channel_num = channel_num
         self._channel_name = channel_name
 
-        serial = (
+        nvr_serial = (
             self.coordinator.data.get("serial", self.coordinator.client.host)
             if self.coordinator.data
             else self.coordinator.client.host
         )
-        if channel_name:
-            self._attr_unique_id = f"{serial}_ch{channel_num}_day_night"
-            self._attr_device_info = self.coordinator.get_channel_device_info(channel_num, channel_name)
-        else:
-            self._attr_unique_id = f"{serial}_day_night"
-            self._attr_device_info = self.coordinator.device_info
-
+        self._attr_unique_id = f"{nvr_serial}_ch{channel_num}_day_night"
         self._attr_name = "Day/Night Mode"
+        self._attr_device_info = self.coordinator.get_channel_device_info(channel_num, channel_name)
 
     @property
     def current_option(self) -> str | None:
@@ -130,7 +105,7 @@ class CPPlusDayNightSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Selec
 
     @property
     def available(self) -> bool:
-        """Return true if device is online."""
+        """Return true if NVR is online."""
         return super().available and bool(self.coordinator.data and self.coordinator.data.get("online", False))
 
     async def async_select_option(self, option: str) -> None:
@@ -157,7 +132,7 @@ class CPPlusIlluminatorSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Se
         coordinator: CPPlusDataUpdateCoordinator,
         channel_idx: int,
         channel_num: int,
-        channel_name: str | None,
+        channel_name: str,
     ) -> None:
         """Initialize Illuminator select entity."""
         super().__init__(coordinator)
@@ -165,19 +140,14 @@ class CPPlusIlluminatorSelect(CoordinatorEntity[CPPlusDataUpdateCoordinator], Se
         self._channel_num = channel_num
         self._channel_name = channel_name
 
-        serial = (
+        nvr_serial = (
             self.coordinator.data.get("serial", self.coordinator.client.host)
             if self.coordinator.data
             else self.coordinator.client.host
         )
-        if channel_name:
-            self._attr_unique_id = f"{serial}_ch{channel_num}_illuminator"
-            self._attr_device_info = self.coordinator.get_channel_device_info(channel_num, channel_name)
-        else:
-            self._attr_unique_id = f"{serial}_illuminator"
-            self._attr_device_info = self.coordinator.device_info
-
+        self._attr_unique_id = f"{nvr_serial}_ch{channel_num}_illuminator"
         self._attr_name = "Illuminator Mode"
+        self._attr_device_info = self.coordinator.get_channel_device_info(channel_num, channel_name)
 
     @property
     def current_option(self) -> str | None:

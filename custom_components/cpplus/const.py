@@ -19,14 +19,6 @@ CONF_CHANNELS = "channels"
 DEFAULT_PORT_HTTPS = 443
 DEFAULT_PORT_RTSP = 554
 
-CONF_STREAM_PROFILE = "stream_profile"
-CONF_RTSP_OVER_TLS = "rtsp_over_tls"
-STREAM_PROFILE_VIDEO_LIVE = "video_live"
-STREAM_PROFILE_DAHUA_CH0 = "dahua_ch0"
-STREAM_PROFILE_DAHUA_CH1 = "dahua_ch1"
-STREAM_PROFILE_ONVIF = "onvif"
-STREAM_PROFILE_LIVE = "live"
-
 TYPE_CAMERA = "camera"
 TYPE_NVR = "nvr"
 
@@ -68,7 +60,16 @@ PTZ_COMMANDS: dict[str, str] = {
     "focus_far": "FocusFar",
 }
 
-SUBENTRY_TYPE_CHANNEL = "camera_channel"
-SUBENTRY_TYPE_HUB = "nvr_hub"
+SUBENTRY_TYPE_HUB = "hub"
+SUBENTRY_TYPE_CHANNEL = "channel"
+
+CONF_STREAM_PROFILE = "stream_profile"
+CONF_RTSP_OVER_TLS = "rtsp_over_tls"
+
+STREAM_PROFILE_DAHUA_CH1 = "dahua_ch1"
+STREAM_PROFILE_DAHUA_CH0 = "dahua_ch0"
+STREAM_PROFILE_VIDEO_LIVE = "video_live"
+STREAM_PROFILE_ONVIF = "onvif"
+STREAM_PROFILE_LIVE = "live"
 
 

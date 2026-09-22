@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from types import MappingProxyType
+from typing import Any
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ServiceValidationError
@@ -26,10 +27,10 @@ from .const import (
     CONF_DEVICE_TYPE,
     CONF_STREAM_PROFILE,
     CONF_RTSP_OVER_TLS,
-    DEFAULT_PORT_HTTPS,
-    DEFAULT_PORT_RTSP,
     SUBENTRY_TYPE_CHANNEL,
     SUBENTRY_TYPE_HUB,
+    DEFAULT_PORT_HTTPS,
+    DEFAULT_PORT_RTSP,
     TYPE_CAMERA,
     TYPE_NVR,
     PTZ_COMMANDS,
@@ -182,7 +183,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     port = entry.options.get(CONF_PORT, entry.data.get(CONF_PORT, DEFAULT_PORT_HTTPS))
     rtsp_port = entry.options.get(CONF_RTSP_PORT, entry.data.get(CONF_RTSP_PORT, DEFAULT_PORT_RTSP))
     stream_profile = entry.options.get(CONF_STREAM_PROFILE, entry.data.get(CONF_STREAM_PROFILE))
-    rtsp_over_tls = entry.options.get(CONF_RTSP_OVER_TLS, entry.data.get(CONF_RTSP_OVER_TLS))
+    rtsp_over_tls = entry.options.get(CONF_RTSP_OVER_TLS, entry.data.get(CONF_RTSP_OVER_TLS, False))
     username = entry.data[CONF_USERNAME]
     password = entry.data.get(CONF_PASSWORD, "")
     name = entry.data.get(CONF_NAME, host)
@@ -200,9 +201,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         rtsp_over_tls=rtsp_over_tls,
     )
 
-    entry.async_on_unload(entry.add_update_listener(async_reload_entry))
-
-    coordinator = CPPlusDataUpdateCoordinator(hass, client, name, entry=entry)
+    coordinator = CPPlusDataUpdateCoordinator(hass, client, name)
     await coordinator.async_config_entry_first_refresh()
 
     # Pre-register the parent device in the device registry to obtain its device ID
@@ -217,35 +216,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             dev_name = f"CP PLUS NVR {coordinator.device_name}"
         else:
             dev_name = f"CP PLUS NVR {model}" if model else "CP PLUS NVR"
-
-        # Register NVR Hub subentry so the NVR device is not orphaned in the UI
-        nvr_subentries = entry.get_subentries_of_type(SUBENTRY_TYPE_HUB)
-        if not nvr_subentries:
-            nvr_subentry = ConfigSubentry(
-                data=MappingProxyType({"name": dev_name}),
-                subentry_type=SUBENTRY_TYPE_HUB,
-                title=dev_name,
-                unique_id=f"{serial}_hub",
-            )
-            hass.config_entries.async_add_subentry(entry, nvr_subentry)
-            nvr_subentry_id = nvr_subentry.subentry_id
-        else:
-            nvr_subentry = nvr_subentries[0]
-            nvr_subentry_id = nvr_subentry.subentry_id
-            if nvr_subentry.title:
-                dev_name = nvr_subentry.title
     else:
-        nvr_subentry_id = None
         if coordinator.device_name and coordinator.device_name != client.host:
             dev_name = f"CP PLUS Camera {coordinator.device_name}"
         else:
             dev_name = f"CP PLUS Camera {model}" if model else "CP PLUS Camera"
 
-    coordinator.hub_subentry_id = nvr_subentry_id
-
     parent_device = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
-        config_subentry_id=nvr_subentry_id,
         identifiers={(DOMAIN, serial)},
         name=dev_name,
         manufacturer=MANUFACTURER,
@@ -257,67 +235,47 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
-    _LOGGER.info("Starting real-time event listener for %s (%s)", host, client.device_type)
-    entry.async_create_background_task(
-        hass,
-        client.async_start_event_listener(
-            coordinator.handle_event,
-            on_auth_failed=lambda: entry.async_start_reauth(hass),
-            on_disconnect=coordinator.clear_events,
-        ),
-        f"cpplus_event_listener_{host}",
-    )
-
-    # Register camera channel subentries for NVR entries
-    if client.device_type == TYPE_NVR and coordinator.channels:
-        existing_subentries = {
-            s.unique_id: s
-            for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
-        }
-        for ch in coordinator.channels:
-            ch_uid = f"{serial}_ch{ch['channel']}"
-            if ch_uid not in existing_subentries:
-                subentry = ConfigSubentry(
-                    data=MappingProxyType({
-                        "channel": ch["channel"],
-                        "channel_index": ch["index"],
-                        "name": ch["name"],
-                        "is_native_cpplus": ch.get("is_native_cpplus", False),
-                        "has_smd": ch.get("has_smd", False),
-                        "has_tripwire": ch.get("has_tripwire", False),
-                        "model": ch.get("model", "Camera"),
-                        "address": ch.get("address"),
-                    }),
-                    subentry_type=SUBENTRY_TYPE_CHANNEL,
-                    title=ch["name"],
-                    unique_id=ch_uid,
-                )
-                hass.config_entries.async_add_subentry(entry, subentry)
-            else:
-                subentry = existing_subentries[ch_uid]
-                if subentry.title:
-                    ch["name"] = subentry.title
-
-    # Ensure any manually created channel subentry has a synthesized channel in coordinator.channels
     if client.device_type == TYPE_NVR:
-        configured_channel_nums = {ch["channel"] for ch in coordinator.channels}
-        for subentry in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL):
-            ch_num = subentry.data.get("channel")
-            if ch_num and ch_num not in configured_channel_nums:
-                coordinator.channels.append({
-                    "channel": ch_num,
-                    "index": ch_num - 1,
-                    "name": subentry.title or subentry.data.get("name") or f"Channel {ch_num}",
-                    "model": subentry.data.get("model", "Camera"),
-                    "manufacturer": "Generic ONVIF",
-                    "is_native_cpplus": subentry.data.get("is_native_cpplus", False),
-                    "has_smd": subentry.data.get("has_smd", False),
-                    "has_tripwire": subentry.data.get("has_tripwire", False),
-                    "serial": None,
-                    "firmware": None,
-                    "address": None,
-                })
-                configured_channel_nums.add(ch_num)
+        _LOGGER.info("Starting real-time NVR event listener for %s", host)
+        entry.async_create_background_task(
+            hass,
+            client.async_start_event_listener(
+                coordinator.handle_event,
+                on_auth_failed=lambda: entry.async_start_reauth(hass),
+                on_disconnect=coordinator.clear_events,
+            ),
+            f"cpplus_event_listener_{host}",
+        )
+
+        # Register camera channel subentries for NVR entries
+        if coordinator.channels:
+            existing_subentries = {
+                s.unique_id: s
+                for s in entry.get_subentries_of_type(SUBENTRY_TYPE_CHANNEL)
+            }
+            for ch in coordinator.channels:
+                ch_uid = f"{serial}_ch{ch['channel']}"
+                if ch_uid not in existing_subentries:
+                    subentry = ConfigSubentry(
+                        data=MappingProxyType({
+                            "channel": ch["channel"],
+                            "channel_index": ch["index"],
+                            "name": ch["name"],
+                            "is_native_cpplus": ch.get("is_native_cpplus", False),
+                            "has_smd": ch.get("has_smd", False),
+                            "has_tripwire": ch.get("has_tripwire", False),
+                            "model": ch.get("model", "Camera"),
+                            "address": ch.get("address"),
+                        }),
+                        subentry_type=SUBENTRY_TYPE_CHANNEL,
+                        title=ch["name"],
+                        unique_id=ch_uid,
+                    )
+                    hass.config_entries.async_add_subentry(entry, subentry)
+                else:
+                    subentry = existing_subentries[ch_uid]
+                    if subentry.title:
+                        ch["name"] = subentry.title
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
@@ -353,8 +311,6 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.debug("Migrating CP PLUS config entry from version %s", entry.version)
 
     if entry.version == 1:
-        # Migration from v1 to v2:
-        # Subentries are created dynamically during setup
         hass.config_entries.async_update_entry(entry, version=2)
         _LOGGER.info("Successfully migrated CP PLUS config entry to version 2")
 

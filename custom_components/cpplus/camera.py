@@ -1,21 +1,15 @@
+"""Camera platform for CP PLUS STQC integration."""
+
 from __future__ import annotations
 
 import logging
-from typing import Any
-import urllib.parse
 from homeassistant.components.camera import Camera, CameraEntityFeature
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import (
-    DEFAULT_PORT_RTSP,
-    DOMAIN,
-    STREAM_PROFILE_DAHUA_CH1,
-    SUBENTRY_TYPE_CHANNEL,
-    TYPE_NVR,
-)
+from .const import DOMAIN, SUBENTRY_TYPE_CHANNEL, TYPE_NVR
 from .coordinator import CPPlusDataUpdateCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,7 +34,6 @@ async def async_setup_entry(
             subentry = subentries.get(ch_num)
             ch_name = (subentry.title if subentry and subentry.title else None) or ch["name"]
             subentry_id = subentry.subentry_id if subentry else None
-            subentry_data = dict(subentry.data) if subentry else {}
 
             entities: list[Camera] = [
                 CPPlusCamera(
@@ -49,8 +42,6 @@ async def async_setup_entry(
                     subtype=0,
                     stream_label="Main",
                     channel_name=ch_name,
-                    subentry_data=subentry_data,
-                    ch_info=ch,
                 ),
                 CPPlusCamera(
                     coordinator,
@@ -58,8 +49,6 @@ async def async_setup_entry(
                     subtype=1,
                     stream_label="Sub",
                     channel_name=ch_name,
-                    subentry_data=subentry_data,
-                    ch_info=ch,
                 ),
             ]
             async_add_entities(entities, config_subentry_id=subentry_id)
@@ -84,8 +73,6 @@ class CPPlusCamera(CoordinatorEntity[CPPlusDataUpdateCoordinator], Camera):
         subtype: int = 0,
         stream_label: str = "Main",
         channel_name: str | None = None,
-        subentry_data: dict[str, Any] | None = None,
-        ch_info: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the CP PLUS camera entity."""
         super().__init__(coordinator)
@@ -94,8 +81,6 @@ class CPPlusCamera(CoordinatorEntity[CPPlusDataUpdateCoordinator], Camera):
         self._subtype = subtype
         self._stream_label = stream_label
         self._channel_name = channel_name
-        self._subentry_data = subentry_data or {}
-        self._ch_info = ch_info or {}
 
         serial = (
             self.coordinator.data.get("serial", self.coordinator.client.host)
@@ -117,64 +102,12 @@ class CPPlusCamera(CoordinatorEntity[CPPlusDataUpdateCoordinator], Camera):
         """Return true if entity is available."""
         return super().available and bool(self.coordinator.data and self.coordinator.data.get("online", False))
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        """Return entity specific state attributes."""
-        attrs: dict[str, Any] = {
-            "channel": self._channel,
-            "subtype": self._subtype,
-            "stream_profile": self._stream_label,
-        }
-        if self._subentry_data.get("direct_connection"):
-            attrs["connection_mode"] = "direct"
-            attrs["direct_host"] = self._subentry_data.get("direct_host") or self._ch_info.get("address")
-        else:
-            attrs["connection_mode"] = "nvr_proxy"
-        return attrs
-
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Capture a snapshot image from the CP PLUS camera."""
-        if self._subentry_data.get("direct_connection"):
-            direct_host = self._subentry_data.get("direct_host") or self._ch_info.get("address")
-            if direct_host:
-                direct_http_port = self._subentry_data.get("direct_http_port", 80)
-                use_nvr_creds = self._subentry_data.get("use_nvr_credentials", True)
-                username = self.coordinator.client.username if use_nvr_creds else (self._subentry_data.get("direct_username") or self.coordinator.client.username)
-                password = self.coordinator.client.password if use_nvr_creds else (self._subentry_data.get("direct_password") or self.coordinator.client.password)
-                return await self.coordinator.client.async_get_snapshot(
-                    channel=1,
-                    host_override=direct_host,
-                    port_override=direct_http_port,
-                    username_override=username,
-                    password_override=password,
-                )
-
         return await self.coordinator.client.async_get_snapshot(self._channel)
 
     async def stream_source(self) -> str | None:
         """Return the RTSP stream URL."""
-        if self._subentry_data.get("direct_connection"):
-            direct_host = self._subentry_data.get("direct_host") or self._ch_info.get("address")
-            if direct_host:
-                direct_rtsp_port = self._subentry_data.get("direct_rtsp_port", DEFAULT_PORT_RTSP)
-                use_nvr_creds = self._subentry_data.get("use_nvr_credentials", True)
-                username = self.coordinator.client.username if use_nvr_creds else (self._subentry_data.get("direct_username") or self.coordinator.client.username)
-                password = self.coordinator.client.password if use_nvr_creds else (self._subentry_data.get("direct_password") or self.coordinator.client.password)
-                prof = self._subentry_data.get("stream_profile") or STREAM_PROFILE_DAHUA_CH1
-                return self.coordinator.client.get_stream_url(
-                    channel=1,
-                    subtype=self._subtype,
-                    stream_profile=prof,
-                    use_tls=False,
-                    host_override=direct_host,
-                    port_override=direct_rtsp_port,
-                    username_override=username,
-                    password_override=password,
-                )
-
         return self.coordinator.client.get_stream_url(self._channel, self._subtype)
-
-
-

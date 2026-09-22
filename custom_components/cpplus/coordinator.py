@@ -5,7 +5,6 @@ import logging
 import time
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -28,20 +27,13 @@ _LOGGER = logging.getLogger(__name__)
 class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator to manage CP PLUS camera and NVR state updates."""
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        client: CPPlusClient,
-        name: str,
-        entry: ConfigEntry | None = None,
-    ) -> None:
+    def __init__(self, hass: HomeAssistant, client: CPPlusClient, name: str) -> None:
         """Initialize coordinator."""
         super().__init__(
             hass,
             _LOGGER,
             name=f"CP PLUS STQC {name}",
             update_interval=timedelta(seconds=30),
-            config_entry=entry,
         )
         self.client = client
         self.device_name = name
@@ -49,7 +41,6 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.channels: list[dict[str, Any]] = []
         self.channel_events: dict[int, dict[str, bool]] = {}
         self.parent_device_id: str | None = None
-        self.hub_subentry_id: str | None = None
         self._last_channel_refresh: float = 0.0
 
     def handle_event(self, channel_idx: int, event_code: str, action: str) -> None:
@@ -112,8 +103,7 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fetch latest camera or NVR telemetry."""
         try:
             if not self.device_info_data:
-                fallback_serial = self.config_entry.unique_id if self.config_entry and self.config_entry.unique_id else None
-                self.device_info_data = await self.client.async_get_device_info(fallback_serial=fallback_serial)
+                self.device_info_data = await self.client.async_get_device_info()
 
             now = time.monotonic()
             if not self.channels or (now - self._last_channel_refresh >= 600):
@@ -135,7 +125,7 @@ class CPPlusDataUpdateCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Lightweight connection ping
                 await self.client.async_nvr_request("/cgi-bin/magicBox.cgi?action=getDeviceType")
             else:
-                # Lightweight connection ping: verify camera web server is responsive
+                # Lightweight connection ping: verify camera is responsive
                 await self.client.async_ping()
 
             return {
