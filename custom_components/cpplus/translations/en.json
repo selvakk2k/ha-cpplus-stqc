@@ -97,7 +97,21 @@
           "title": "Configure Camera Channel",
           "description": "Adjust configuration options for this camera channel.",
           "data": {
-            "name": "Channel Name"
+            "name": "Channel Name",
+            "direct_connection": "Direct Camera Connection (Bypass NVR Proxy)"
+          }
+        },
+        "direct_camera": {
+          "title": "Direct Camera Connection Settings",
+          "description": "Configure direct streaming settings for this camera or intercom.",
+          "data": {
+            "direct_host": "Direct Camera IP Address",
+            "stream_profile": "RTSP Stream Profile",
+            "direct_rtsp_port": "Direct RTSP Port (Default: 554)",
+            "direct_http_port": "Direct HTTP Port (Default: 80)",
+            "use_nvr_credentials": "Use NVR Username & Password",
+            "direct_username": "Custom Camera Username",
+            "direct_password": "Custom Camera Password"
           }
         }
       },

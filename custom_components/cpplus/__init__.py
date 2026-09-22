@@ -286,6 +286,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "has_smd": ch.get("has_smd", False),
                         "has_tripwire": ch.get("has_tripwire", False),
                         "model": ch.get("model", "Camera"),
+                        "address": ch.get("address"),
                     }),
                     subentry_type=SUBENTRY_TYPE_CHANNEL,
                     title=ch["name"],

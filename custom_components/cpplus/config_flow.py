@@ -161,20 +161,38 @@ class CameraChannelSubentryFlowHandler(ConfigSubentryFlow):
             errors=errors,
         )
 
+    def __init__(self) -> None:
+        """Initialize channel subentry flow."""
+        self._reconf_name: str = ""
+
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
     ) -> SubentryFlowResult:
         """Reconfigure an existing camera channel subentry."""
-        config_entry = self._get_entry()
         subentry = self._get_reconfigure_subentry()
 
         if user_input is not None:
-            new_name = user_input["name"].strip()
+            self._reconf_name = user_input["name"].strip() or subentry.title
+            if user_input.get("direct_connection", False):
+                return await self.async_step_direct_camera()
+
+            # If direct connection is False, save name and clear direct connection settings
+            config_entry = self._get_entry()
             return self.async_update_and_abort(
                 config_entry,
                 subentry,
-                title=new_name,
-                data_updates={"name": new_name},
+                title=self._reconf_name,
+                data_updates={
+                    "name": self._reconf_name,
+                    "direct_connection": False,
+                    "direct_host": None,
+                    "direct_rtsp_port": None,
+                    "direct_http_port": None,
+                    "use_nvr_credentials": True,
+                    "direct_username": None,
+                    "direct_password": None,
+                    "stream_profile": None,
+                },
             )
 
         schema = vol.Schema(
@@ -183,11 +201,110 @@ class CameraChannelSubentryFlowHandler(ConfigSubentryFlow):
                     "name",
                     default=subentry.data.get("name", subentry.title)
                 ): str,
+                vol.Required(
+                    "direct_connection",
+                    default=subentry.data.get("direct_connection", False)
+                ): bool,
             }
         )
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=schema,
+        )
+
+    async def async_step_direct_camera(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Configure direct camera connection options."""
+        config_entry = self._get_entry()
+        subentry = self._get_reconfigure_subentry()
+        errors: dict[str, str] = {}
+
+        # Pre-fill direct_host with discovered address if available
+        default_host = subentry.data.get("direct_host") or subentry.data.get("address") or ""
+        if not default_host:
+            coordinator = self.hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+            if coordinator and getattr(coordinator, "channels", None):
+                ch = next((c for c in coordinator.channels if c.get("channel") == subentry.data.get("channel")), None)
+                if ch and ch.get("address"):
+                    default_host = ch.get("address")
+
+        if user_input is not None:
+            direct_host = user_input.get("direct_host", "").strip()
+            if not direct_host:
+                errors["direct_host"] = "invalid_host"
+            else:
+                use_nvr_creds = user_input.get("use_nvr_credentials", True)
+                direct_user = None if use_nvr_creds else (user_input.get("direct_username", "").strip() or None)
+                direct_pass = None if use_nvr_creds else (user_input.get("direct_password", "").strip() or None)
+                profile = user_input.get("stream_profile", STREAM_PROFILE_DAHUA_CH1)
+
+                return self.async_update_and_abort(
+                    config_entry,
+                    subentry,
+                    title=self._reconf_name or subentry.title,
+                    data_updates={
+                        "name": self._reconf_name or subentry.title,
+                        "direct_connection": True,
+                        "direct_host": direct_host,
+                        "direct_rtsp_port": user_input.get("direct_rtsp_port", DEFAULT_PORT_RTSP),
+                        "direct_http_port": user_input.get("direct_http_port", 80),
+                        "use_nvr_credentials": use_nvr_creds,
+                        "direct_username": direct_user,
+                        "direct_password": direct_pass,
+                        "stream_profile": profile,
+                    },
+                )
+
+        stream_profiles = [
+            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH1, label="Dahua / CP PLUS Realmonitor (/cam/realmonitor?channel=1) [Default]"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_VIDEO_LIVE, label="CP PLUS STQC Native (/video/live?channel=1)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_DAHUA_CH0, label="Dahua Realmonitor (Channel 0)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_ONVIF, label="ONVIF Profile S (/onvif1 Main, /onvif2 Sub)"),
+            selector.SelectOptionDict(value=STREAM_PROFILE_LIVE, label="Live Stream (/live)"),
+        ]
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    "direct_host",
+                    default=default_host
+                ): str,
+                vol.Optional(
+                    "stream_profile",
+                    default=subentry.data.get("stream_profile", STREAM_PROFILE_DAHUA_CH1)
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=stream_profiles,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+                vol.Optional(
+                    "direct_rtsp_port",
+                    default=subentry.data.get("direct_rtsp_port") or DEFAULT_PORT_RTSP
+                ): int,
+                vol.Optional(
+                    "direct_http_port",
+                    default=subentry.data.get("direct_http_port") or 80
+                ): int,
+                vol.Required(
+                    "use_nvr_credentials",
+                    default=subentry.data.get("use_nvr_credentials", True)
+                ): bool,
+                vol.Optional(
+                    "direct_username",
+                    default=subentry.data.get("direct_username") or ""
+                ): str,
+                vol.Optional(
+                    "direct_password",
+                    default=subentry.data.get("direct_password") or ""
+                ): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="direct_camera",
+            data_schema=schema,
+            errors=errors,
         )
 
 

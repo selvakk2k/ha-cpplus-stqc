@@ -189,17 +189,39 @@ async def test_subentry_flow_add_and_reconfigure(hass: HomeAssistant) -> None:
     assert dup_result["type"] == FlowResultType.FORM
     assert dup_result["errors"] == {"channel": "channel_exists"}
 
-    # Reconfigure subentry title
+    # Reconfigure subentry with direct camera connection
     reconf_flow = CameraChannelSubentryFlowHandler()
     reconf_flow.hass = hass
     reconf_flow.handler = (entry.entry_id, SUBENTRY_TYPE_CHANNEL)
     reconf_flow.context = {"source": "reconfigure", "subentry_id": subentry.subentry_id}
 
-    reconf_result = await reconf_flow.async_step_reconfigure({"name": "Front Porch Cam"})
+    reconf_step1 = await reconf_flow.async_step_reconfigure({"name": "Front Porch Cam", "direct_connection": True})
+    assert reconf_step1["type"] == FlowResultType.FORM
+    assert reconf_step1["step_id"] == "direct_camera"
+
+    reconf_result = await reconf_flow.async_step_direct_camera({
+        "direct_host": "192.168.1.150",
+        "direct_rtsp_port": 554,
+        "direct_http_port": 80,
+        "use_nvr_credentials": True,
+    })
     assert reconf_result["type"] == FlowResultType.ABORT
     assert reconf_result["reason"] == "reconfigure_successful"
     assert subentry.title == "Front Porch Cam"
     assert subentry.data["name"] == "Front Porch Cam"
+    assert subentry.data["direct_connection"] is True
+    assert subentry.data["direct_host"] == "192.168.1.150"
+
+    # Reconfigure back to NVR proxy (direct_connection: False)
+    reconf_flow2 = CameraChannelSubentryFlowHandler()
+    reconf_flow2.hass = hass
+    reconf_flow2.handler = (entry.entry_id, SUBENTRY_TYPE_CHANNEL)
+    reconf_flow2.context = {"source": "reconfigure", "subentry_id": subentry.subentry_id}
+
+    reconf_result2 = await reconf_flow2.async_step_reconfigure({"name": "Front Porch Cam", "direct_connection": False})
+    assert reconf_result2["type"] == FlowResultType.ABORT
+    assert reconf_result2["reason"] == "reconfigure_successful"
+    assert subentry.data["direct_connection"] is False
 
 
 @pytest.mark.asyncio
@@ -376,6 +398,26 @@ async def test_camera_stream_source(hass: HomeAssistant) -> None:
     cam = CPPlusCamera(coordinator, channel=1, subtype=0, stream_label="Main", channel_name="Lobby")
     url = await cam.stream_source()
     assert url == "rtsp://admin:admin!123@192.168.1.100:554/cam/realmonitor?channel=1&subtype=0"
+    assert cam.extra_state_attributes["connection_mode"] == "nvr_proxy"
+
+    # Direct connection on channel
+    cam_direct = CPPlusCamera(
+        coordinator,
+        channel=16,
+        subtype=0,
+        stream_label="Main",
+        channel_name="Intercom",
+        subentry_data={
+            "direct_connection": True,
+            "direct_host": "10.0.29.150",
+            "direct_rtsp_port": 554,
+            "use_nvr_credentials": True,
+        },
+    )
+    assert cam_direct.extra_state_attributes["connection_mode"] == "direct"
+    assert cam_direct.extra_state_attributes["direct_host"] == "10.0.29.150"
+    url_direct = await cam_direct.stream_source()
+    assert url_direct == "rtsp://admin:admin!123@10.0.29.150:554/cam/realmonitor?channel=1&subtype=0"
 
     # Standalone camera defaults to video_live profile and RTSP over TLS (rtsps)
     client_cam = CPPlusClient(

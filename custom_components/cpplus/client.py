@@ -1166,12 +1166,21 @@ class CPPlusClient:
         subtype: int = 0,
         stream_profile: str | None = None,
         use_tls: bool | None = None,
+        host_override: str | None = None,
+        port_override: int | None = None,
+        username_override: str | None = None,
+        password_override: str | None = None,
     ) -> str:
         """Return the RTSP / RTSPS stream URL for the requested channel and stream type."""
         # Subtype 0 = Main Stream (HD), 1 = Sub Stream (SD)
         # Use safe RFC 3986 sub-delims so FFmpeg Digest Auth does not receive corrupted %XX password
-        username = urllib.parse.quote(self.username, safe="!$&'()*+,-._~")
-        password = urllib.parse.quote(self.password, safe="!$&'()*+,-._~")
+        raw_user = username_override if username_override is not None else self.username
+        raw_pass = password_override if password_override is not None else self.password
+        username = urllib.parse.quote(raw_user, safe="!$&'()*+,-._~")
+        password = urllib.parse.quote(raw_pass, safe="!$&'()*+,-._~")
+
+        target_host = host_override or self.host
+        target_port = port_override or self.rtsp_port
 
         profile = stream_profile or getattr(self, "stream_profile", None)
         if not profile:
@@ -1182,35 +1191,80 @@ class CPPlusClient:
 
         if profile == STREAM_PROFILE_VIDEO_LIVE:
             return (
-                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"{scheme}://{username}:{password}@{target_host}:{target_port}"
                 f"/video/live?channel={channel}&subtype={subtype}"
             )
         elif profile == STREAM_PROFILE_ONVIF:
             onvif_path = f"onvif{subtype + 1}"
-            return f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}/{onvif_path}"
+            return f"{scheme}://{username}:{password}@{target_host}:{target_port}/{onvif_path}"
         elif profile == STREAM_PROFILE_LIVE:
-            return f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}/live"
+            return f"{scheme}://{username}:{password}@{target_host}:{target_port}/live"
         elif profile == STREAM_PROFILE_DAHUA_CH0:
             return (
-                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"{scheme}://{username}:{password}@{target_host}:{target_port}"
                 f"/cam/realmonitor?channel=0&subtype={subtype}"
             )
         else:
             return (
-                f"{scheme}://{username}:{password}@{self.host}:{self.rtsp_port}"
+                f"{scheme}://{username}:{password}@{target_host}:{target_port}"
                 f"/cam/realmonitor?channel={channel}&subtype={subtype}"
             )
 
-    async def async_get_snapshot(self, channel: int = 1) -> bytes | None:
+    async def async_get_snapshot(
+        self,
+        channel: int = 1,
+        host_override: str | None = None,
+        port_override: int | None = None,
+        username_override: str | None = None,
+        password_override: str | None = None,
+    ) -> bytes | None:
         """Fetch a snapshot JPEG image from camera or NVR using Digest authentication."""
+        if host_override:
+            scheme = "https" if (port_override == 443) else "http"
+            port = port_override or 80
+            user = username_override or self.username
+            pwd = password_override or self.password
+            digest = AsyncDigestAuth(user, pwd)
+            session = await self._get_session()
+
+            urls_to_try = [
+                f"/cgi-bin/snapshot.cgi?channel=1",
+                f"/cgi-bin/snapshot.cgi?channel=0",
+                f"/cgi-bin/snapshot.cgi",
+            ]
+            for uri in urls_to_try:
+                try:
+                    url = f"{scheme}://{host_override}:{port}{uri}"
+                    headers = {"User-Agent": "Mozilla/5.0"}
+                    if digest.realm and digest.nonce:
+                        headers["Authorization"] = digest.build_header("GET", uri)
+                    async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
+                        if resp.status == 401:
+                            auth_hdr = resp.headers.get("WWW-Authenticate", "")
+                            if "Digest" in auth_hdr:
+                                digest.parse_challenge(auth_hdr)
+                                headers["Authorization"] = digest.build_header("GET", uri)
+                                async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=4)) as retry_resp:
+                                    if retry_resp.status == 200:
+                                        data = await retry_resp.read()
+                                        if data and len(data) > 100:
+                                            return data
+                        elif resp.status == 200:
+                            data = await resp.read()
+                            if data and len(data) > 100:
+                                return data
+                except Exception as err:
+                    _LOGGER.debug("Direct snapshot failed for uri %s on %s: %s", uri, host_override, err)
+            return None
+
         urls_to_try = [
             f"/cgi-bin/snapshot.cgi?channel={channel}",
-            "/cgi-bin/snapshot.cgi",
-            "/cgi-bin/snapshot.cgi?channel=0",
-            "/onvif/snapshot",
+            f"/cgi-bin/snapshot.cgi",
+            f"/cgi-bin/snapshot.cgi?channel=0",
+            f"/onvif/snapshot",
         ] if self.device_type == TYPE_CAMERA else [
             f"/cgi-bin/snapshot.cgi?channel={channel}",
-            "/cgi-bin/snapshot.cgi",
+            f"/cgi-bin/snapshot.cgi",
         ]
 
         for uri in urls_to_try:
