@@ -28,3 +28,4 @@ scripts/
 pytest.ini
 scratch/
 *.tar.gz
+gcmob_apk_findings.md
