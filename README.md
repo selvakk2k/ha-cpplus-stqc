@@ -101,26 +101,16 @@ Zero-cloud, 100% local Home Assistant integration for CP PLUS STQC IP cameras, N
 
 ### Method 1: Via Home Assistant Marketplace (Recommended)
 
-*Requires Home Assistant **2026.11** or newer. (On an older version? Expand the legacy HACS instructions below.)*
-
 [![Open your Home Assistant instance and open a repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=selvakk2k&repository=ha-cpplus-stqc&category=integration)
 
-1. Click the **Open Marketplace repository** button above, or go to **Settings** → **Marketplace** in Home Assistant.
-2. In the upper-right corner, select **Add from link**.
-3. Under **GitHub link**, enter `https://github.com/selvakk2k/ha-cpplus-stqc` (connect your GitHub account if prompted), then select **Add**. *(If prompted for **Type**, select **Integration** and select **Add** again.)*
-4. Open **CP PLUS STQC** from the list, select **Download**, then restart Home Assistant.
+**Home Assistant `2026.11+` (Marketplace):**
+1. Click the **Open Marketplace repository** button above, or go to **Settings** → **Marketplace**.
+2. Select **Add from link** (upper-right), enter `https://github.com/selvakk2k/ha-cpplus-stqc` (connect GitHub if prompted), and select **Add** *(if prompted for **Type**, select **Integration**)*.
+3. Open **CP PLUS STQC**, select **Download**, and restart Home Assistant.
 
-<details>
-<summary>Home Assistant 2026.10 or older (Legacy HACS)</summary>
-
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=selvakk2k&repository=ha-cpplus-stqc&category=integration)
-
-1. Click the **Open repository in HACS** button above, or open **HACS** in your Home Assistant sidebar.
-2. Select **Integrations** > Three dots menu in top-right > **Custom repositories**.
-3. Enter `https://github.com/selvakk2k/ha-cpplus-stqc` with category **Integration**.
-4. Click **Download**, then restart Home Assistant.
-
-</details>
+**Home Assistant `<= 2026.10` (Legacy HACS):**
+1. Open **HACS** in your sidebar → **Integrations** → top-right menu (⋮) → **Custom repositories** → Add `https://github.com/selvakk2k/ha-cpplus-stqc` with category **Integration**.
+2. Search for **CP PLUS STQC**, click **Download**, and restart Home Assistant.
 
 ### Method 2: Manual Installation
 
