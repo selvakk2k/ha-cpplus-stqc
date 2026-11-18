@@ -1,9 +1,11 @@
 # CP PLUS STQC Integration (`ha-cpplus-stqc`)
 
-[![Marketplace Custom](https://img.shields.io/badge/Marketplace-Custom-41BDF5.svg?style=flat-square)](https://www.home-assistant.io/integrations/marketplace/)
-[![Version](https://img.shields.io/github/v/release/selvakk2k/ha-cpplus-stqc?style=flat-square)](https://github.com/selvakk2k/ha-cpplus-stqc/releases)
-[![AI-Assisted](https://img.shields.io/badge/AI%20Assisted-Antigravity%20%7C%20Claude-blueviolet?style=flat-square&logo=google)](https://github.com/selvakk2k)
-[![AI Attribution](https://img.shields.io/badge/AI%20Attribution-AIA%20PAI%20Nc%20Hin-orange?style=flat-square)](https://aiattribution.github.io/interpret-attribution)
+<p align="center">
+  <a href="https://www.home-assistant.io/integrations/marketplace/"><img src="https://img.shields.io/badge/Marketplace-Custom-41BDF5.svg?style=flat-square" alt="Marketplace Custom"></a>
+  <a href="https://github.com/selvakk2k/ha-cpplus-stqc/releases"><img src="https://img.shields.io/github/v/release/selvakk2k/ha-cpplus-stqc?style=flat-square" alt="Version"></a>
+  <a href="https://github.com/selvakk2k"><img src="https://img.shields.io/badge/AI%20Assisted-Antigravity%20%7C%20Claude%20%7C%20CodeRabbit-blueviolet?style=flat-square" alt="AI-Assisted"></a>
+  <a href="https://aiattribution.github.io/interpret-attribution"><img src="https://img.shields.io/badge/AI%20Attribution-AIA%20PAI%20Nc%20Hin-orange?style=flat-square" alt="AI Attribution"></a>
+</p>
 
 Zero-cloud, 100% local Home Assistant integration for CP PLUS STQC IP cameras, NVRs, and connected residential building security hardware. Supports dual-stream RTSP video, snapshot extraction, real-time push event handling for AI human/vehicle detection and perimeter tripwires, and comprehensive hardware telemetry.
 
