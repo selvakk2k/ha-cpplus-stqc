@@ -150,6 +150,13 @@ From **Settings** > **Devices & Services** > **CP PLUS STQC** > **Configure**:
 
 ## Troubleshooting & Logs
 
+### 1. Core Diagnostics
+To diagnose camera connectivity, stream channels, and event subscriptions:
+* Navigate to **Settings → Devices & Services → CP PLUS STQC**.
+* Select your NVR hub or direct camera device, and click **Download diagnostics**.
+* All sensitive credentials, including RTSP passwords and authenticated stream URLs, are automatically sanitized and redacted.
+
+### 2. Enabling Debug Logs
 To enable detailed debug logging for troubleshooting stream negotiation or push events, add the following to your `configuration.yaml`:
 
 ```yaml
