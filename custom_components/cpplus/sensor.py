@@ -19,7 +19,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up CP PLUS sensor entities."""
-    coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: CPPlusDataUpdateCoordinator = (
+        getattr(entry, "runtime_data", None) or hass.data[DOMAIN][entry.entry_id]
+    )
 
     # Root diagnostic sensors for NVR / Standalone device (hub level)
     root_entities: list[SensorEntity] = [

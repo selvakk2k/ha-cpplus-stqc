@@ -30,7 +30,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up CP PLUS cameras from a config entry."""
-    coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: CPPlusDataUpdateCoordinator = (
+        getattr(entry, "runtime_data", None) or hass.data[DOMAIN][entry.entry_id]
+    )
 
     if coordinator.client.device_type == TYPE_NVR and coordinator.channels:
         subentries = {

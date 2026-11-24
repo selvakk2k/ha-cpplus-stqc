@@ -264,6 +264,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     coordinator.parent_device_id = parent_device.id
 
+    try:
+        entry.runtime_data = coordinator
+    except AttributeError:
+        pass
     hass.data[DOMAIN][entry.entry_id] = coordinator
 
     _LOGGER.info("Starting real-time event listener for %s (%s)", host, client.device_type)
@@ -427,6 +431,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        coordinator: CPPlusDataUpdateCoordinator = hass.data[DOMAIN].pop(entry.entry_id)
-        await coordinator.client.async_close()
+        coordinator: CPPlusDataUpdateCoordinator | None = (
+            getattr(entry, "runtime_data", None) or hass.data[DOMAIN].pop(entry.entry_id, None)
+        )
+        if coordinator:
+            await coordinator.client.async_close()
+            hass.data[DOMAIN].pop(entry.entry_id, None)
     return unload_ok
